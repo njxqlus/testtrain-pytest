@@ -2,11 +2,11 @@
 
 Testtrain Pytest Plugin — Real-time test result reporting.
 
-Sends each test result to the Testtrain platform API immediately after the test finishes, enabling real-time visibility.
+Sends each test result to the Testtrain platform API immediately after the test finishes, enabling real-time visibility into your test runs.
 
 ## Installation
 
-You can install `pytest-testtrain` via pip from a git repository:
+You can install `testtrain-pytest` via pip:
 
 ```bash
 pip install git+https://github.com/njxqlus/testtrain-pytest.git
@@ -14,25 +14,58 @@ pip install git+https://github.com/njxqlus/testtrain-pytest.git
 
 ## Configuration
 
-The plugin uses environment variables for configuration. You can set them in your environment or use a `.env` file in your project's root directory:
+The plugin requires two mandatory settings:
+- **Run ID**: The UUID of an existing test run in Testtrain.
+- **Auth Token**: Your bearer authentication token.
 
-- `TESTTRAIN_URL` — Platform base URL (default is https://testtrain.io)
-- `TESTTRAIN_RUN_ID` — ID of an existing testrun
-- `TESTTRAIN_AUTH_TOKEN` — Bearer authentication token
+You can configure these using environment variables, command-line arguments, or your `pytest.ini` file.
 
-## Usage
+### Option 1: Environment Variables (Recommended)
 
-Once installed, the plugin works automatically without any other manipulations. Just run your tests as usual:
+Set these in your shell before running pytest. This is standard for CI/CD environments.
 
 ```bash
+export TESTTRAIN_RUN_ID="your-run-uuid"
+export TESTTRAIN_AUTH_TOKEN="your-token"
 pytest
 ```
 
-If the required environment variables are set, your test results will be reported to the Testtrain platform in real-time.
+> [!TIP]
+> If you want to use a `.env` file, you should install `pytest-dotenv` separately as this plugin does not load `.env` files automatically.
+
+### Option 2: Command Line Arguments
+
+Pass them directly to the `pytest` command.
+
+```bash
+pytest --testtrain-run-id=your-run-uuid --testtrain-auth-token=your-token
+```
+
+### Option 3: Configuration File (`pytest.ini` or `pyproject.toml`)
+
+Add them to your project's configuration file.
+
+**pytest.ini**:
+```ini
+[pytest]
+testtrain_run_id = your-run-uuid
+testtrain_auth_token = your-token
+```
+
+**pyproject.toml**:
+```toml
+[tool.pytest.ini_options]
+testtrain_run_id = "your-run-uuid"
+testtrain_auth_token = "your-token"
+```
+
+## Usage
+
+Once configured, the plugin works automatically. If the required configuration is missing, the plugin will remain inactive and won't affect your tests.
 
 ### Allure Integration
 
-To capture Allure annotations (like titles, labels, and links), you must run your tests with the Allure plugin enabled by specifying an output directory:
+To capture Allure metadata (like custom titles and labels), you must run your tests with the Allure plugin enabled:
 
 ```bash
 pytest --alluredir=allure-results
