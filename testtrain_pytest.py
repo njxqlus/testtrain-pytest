@@ -25,9 +25,14 @@ def pytest_addoption(parser):
     parser.addini("testtrain_run_id", help="UUID of an existing testrun")
     parser.addini("testtrain_auth_token", help="Bearer auth token")
 
+_PLUGIN_CONFIG = None
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
     """Initialize configuration."""
+    global _PLUGIN_CONFIG
+    _PLUGIN_CONFIG = config
+    
     # 1. Extract values with priority: CLI > Config File > Environment Variable > Default
     url = (config.getoption("--testtrain-url") or 
            config.getini("testtrain_url") or 
@@ -49,7 +54,7 @@ def pytest_configure(config):
     config._testtrain_enabled = bool(run_id and auth_token)
     
     # 3. Storage for test lifecycle tracking
-    # Using a dictionary to store state across hooks
+    # Each worker (or the main session) has its own storage
     config._test_start_times = {}
     config._test_meta_stash = {}
 
@@ -57,17 +62,18 @@ def pytest_sessionstart(session):
     """Inform user about reporting status at start of session."""
     config = session.config
     
+    # Only print on the controller, not on workers
+    if hasattr(config, "workerinput"):
+        return
+
     if config._testtrain_enabled:
         print(f"\n🚀 Testtrain: reporting to {config._testtrain_url}")
         print(f"   Testrun ID: {config._testtrain_run_id}\n")
     else:
-        # We don't exit, just skip reporting.
-        # This allows the plugin to be installed but inactive.
         missing = []
         if not config._testtrain_run_id: missing.append("TESTTRAIN_RUN_ID")
         if not config._testtrain_auth_token: missing.append("TESTTRAIN_AUTH_TOKEN")
         
-        # Only notify if one is set but not the other, or if they tried to set URL
         if len(missing) < 2 or config.getoption("--testtrain-url"):
              print(f"\n⚠️  Testtrain: reporting disabled. Missing: {', '.join(missing)}")
 
@@ -80,39 +86,53 @@ def pytest_runtest_setup(item):
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)
 def pytest_runtest_makereport(item, call):
     """
-    Capture metadata and attach config to the report object.
+    Capture metadata and attach to the report object for xdist-safe reporting.
     We use a hookwrapper to ensure we have access to the resulting report.
     """
     outcome = yield
     report = outcome.get_result()
     
-    # Attach config so logreport can access it
-    report.config = item.config
-    
     if not item.config._testtrain_enabled:
         return
 
+    # Phase-specific metadata capture (only on worker/local)
     if call.when == "call":
         _extract_metadata(item)
+    
+    # Bundle data for serialization. We use user_properties as it's automatically 
+    # handled by pytest-xdist when sending reports from worker to controller.
+    data = {
+        "start_time": item.config._test_start_times.get(item.nodeid),
+        "finished_at": _utc_now_iso(),
+        "meta": item.config._test_meta_stash.get(item.nodeid, {}),
+        "name": _get_allure_title() or report.nodeid
+    }
+    report.user_properties.append(("testtrain_data", data))
 
 def pytest_runtest_logreport(report):
     """Send results to Testtrain after the phase completes."""
-    config = report.config
-    if not getattr(config, "_testtrain_enabled", False):
+    config = _PLUGIN_CONFIG
+    if not config or not getattr(config, "_testtrain_enabled", False):
         return
 
-    # report.when can be 'setup', 'call', or 'teardown'
+    # In xdist, we only want to report from the controller to avoid duplicates.
+    # On workers, we skip this hook.
+    if hasattr(config, "workerinput"):
+        return
+
     # We report on 'call' (the test body) or if setup failed (which marks the test as failed/skipped)
-    if report.when == "call" or (report.when == "setup" and report.skipped):
-        pass
-    elif report.when == "setup" and report.failed:
-        # Test failed during setup (e.g. error in fixture)
+    if report.when == "call" or (report.when == "setup" and (report.skipped or report.failed)):
         pass
     else:
         return
 
-    finished_at = _utc_now_iso()
-    started_at = config._test_start_times.pop(report.nodeid, finished_at)
+    # Extract bundled data from user_properties
+    data = next((v for k, v in report.user_properties if k == "testtrain_data"), {})
+    
+    finished_at = data.get("finished_at") or _utc_now_iso()
+    started_at = data.get("start_time") or finished_at
+    meta = data.get("meta") or {}
+    computed_name = data.get("name") or report.nodeid
     state = _STATE_MAP.get(report.outcome, "failed")
     
     # Capture failure output if exists
@@ -120,12 +140,6 @@ def pytest_runtest_logreport(report):
     if report.failed:
         output = report.longreprtext
     
-    meta = config._test_meta_stash.pop(report.nodeid, {})
-    
-    # Title logic: use Allure title if available, otherwise nodeid
-    allure_title = _get_allure_title()
-    computed_name = allure_title if allure_title else report.nodeid
-
     test_entry = {
         "testrunId": config._testtrain_run_id,
         "name": computed_name,
@@ -134,7 +148,7 @@ def pytest_runtest_logreport(report):
         "startedAt": started_at,
         "finishedAt": finished_at,
         "defects": meta.get("allure_links", []),
-        "output": output or ""  # Ensure it's a string, not None
+        "output": output or ""
     }
 
     try:
@@ -178,14 +192,12 @@ def _extract_metadata(item):
     """Internal helper to pull Allure and Pytest markers."""
     markers = []
     for m in item.iter_markers():
-        # Corrected extraction logic: avoid shadowing and fix args
         markers.append({
             "name": m.name,
             "args": [str(a) for a in m.args]
         })
     
     allure_links = []
-    # Specifically extract 'issue' links from Allure if present
     for mark in item.iter_markers(name="allure_link"):
         if mark.kwargs.get("link_type") == "issue":
             issue = {"url": mark.args[0] if mark.args else ""}
