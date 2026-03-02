@@ -7,6 +7,7 @@ name = "pytest-testtrain"
 version = "0.1.0"
 description = "Testtrain Pytest Plugin — Real-time test result reporting."
 readme = "README.md"
+license = {text = "GPL-3.0-only"}
 requires-python = ">=3.8"
 dependencies = [
     "pytest>=7.0.0",
@@ -17,7 +18,7 @@ dependencies = [
 classifiers = [
     "Framework :: Pytest",
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: OS Independent",
 ]
 
