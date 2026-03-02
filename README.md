@@ -14,9 +14,10 @@ pip install git+https://github.com/njxqlus/testtrain-pytest.git
 
 ## Configuration
 
-The plugin requires two mandatory settings:
-- **Run ID**: The UUID of an existing test run in Testtrain.
-- **Auth Token**: Your bearer authentication token.
+The plugin supports the following settings:
+- **Run ID** (Mandatory): The UUID of an existing test run in Testtrain.
+- **Auth Token** (Mandatory): Your bearer authentication token.
+- **URL** (Optional): The platform base URL. Defaults to `https://testtrain.io`.
 
 You can configure these using environment variables, command-line arguments, or your `pytest.ini` file.
 
@@ -27,6 +28,7 @@ Set these in your shell before running pytest. This is standard for CI/CD enviro
 ```bash
 export TESTTRAIN_RUN_ID="your-run-uuid"
 export TESTTRAIN_AUTH_TOKEN="your-token"
+export TESTTRAIN_URL="https://custom.testtrain.io" # Optional
 pytest
 ```
 
@@ -38,7 +40,7 @@ pytest
 Pass them directly to the `pytest` command.
 
 ```bash
-pytest --testtrain-run-id=your-run-uuid --testtrain-auth-token=your-token
+pytest --testtrain-run-id=your-run-uuid --testtrain-auth-token=your-token --testtrain-url=https://custom.testtrain.io
 ```
 
 ### Option 3: Configuration File (`pytest.ini` or `pyproject.toml`)
@@ -50,6 +52,7 @@ Add them to your project's configuration file.
 [pytest]
 testtrain_run_id = your-run-uuid
 testtrain_auth_token = your-token
+testtrain_url = https://custom.testtrain.io
 ```
 
 **pyproject.toml**:
@@ -57,6 +60,7 @@ testtrain_auth_token = your-token
 [tool.pytest.ini_options]
 testtrain_run_id = "your-run-uuid"
 testtrain_auth_token = "your-token"
+testtrain_url = "https://custom.testtrain.io"
 ```
 
 ## Usage

@@ -77,8 +77,18 @@ def pytest_runtest_setup(item):
     if item.config._testtrain_enabled:
         item.config._test_start_times[item.nodeid] = _utc_now_iso()
 
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
 def pytest_runtest_makereport(item, call):
-    """Capture metadata during test execution."""
+    """
+    Capture metadata and attach config to the report object.
+    We use a hookwrapper to ensure we have access to the resulting report.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    
+    # Attach config so logreport can access it
+    report.config = item.config
+    
     if not item.config._testtrain_enabled:
         return
 
@@ -124,7 +134,7 @@ def pytest_runtest_logreport(report):
         "startedAt": started_at,
         "finishedAt": finished_at,
         "defects": meta.get("allure_links", []),
-        "output": output
+        "output": output or ""  # Ensure it's a string, not None
     }
 
     try:
@@ -139,6 +149,10 @@ def pytest_runtest_logreport(report):
         )
         if not resp.ok:
              print(f"\n  ❌ Failed to report to Testtrain: {resp.status_code}")
+             try:
+                 print(f"     Error: {resp.json().get('message', resp.text)}")
+             except:
+                 print(f"     Error: {resp.text}")
     except Exception as e:
         print(f"\n  ⚠️  Error reporting to Testtrain: {e}")
 
