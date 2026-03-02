@@ -28,7 +28,7 @@ Set these in your shell before running pytest. This is standard for CI/CD enviro
 ```bash
 export TESTTRAIN_RUN_ID="your-run-uuid"
 export TESTTRAIN_AUTH_TOKEN="your-token"
-export TESTTRAIN_URL="https://custom.testtrain.io" # Optional
+export TESTTRAIN_URL="https://testtrain.io" # Optional
 pytest
 ```
 
@@ -52,7 +52,7 @@ Add them to your project's configuration file.
 [pytest]
 testtrain_run_id = your-run-uuid
 testtrain_auth_token = your-token
-testtrain_url = https://custom.testtrain.io
+testtrain_url = https://testtrain.io
 ```
 
 **pyproject.toml**:
@@ -60,7 +60,7 @@ testtrain_url = https://custom.testtrain.io
 [tool.pytest.ini_options]
 testtrain_run_id = "your-run-uuid"
 testtrain_auth_token = "your-token"
-testtrain_url = "https://custom.testtrain.io"
+testtrain_url = "https://testtrain.io"
 ```
 
 ## Usage
