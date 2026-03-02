@@ -1,4 +1,4 @@
-# pytest-testtrain
+# testtrain-pytest
 
 Testtrain Pytest Plugin — Real-time test result reporting.
 
