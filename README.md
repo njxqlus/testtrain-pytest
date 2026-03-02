@@ -16,7 +16,7 @@ pip install git+https://github.com/njxqlus/testtrain-pytest.git
 
 The plugin uses environment variables for configuration. You can set them in your environment or use a `.env` file in your project's root directory:
 
-- `TESTTRAIN_URL` — Platform base URL (e.g., http://localhost:3000)
+- `TESTTRAIN_URL` — Platform base URL (default is https://testtrain.io)
 - `TESTTRAIN_RUN_ID` — ID of an existing testrun
 - `TESTTRAIN_AUTH_TOKEN` — Bearer authentication token
 

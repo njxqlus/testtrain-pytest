@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TESTTRAIN_URL = os.getenv("TESTTRAIN_URL")
+TESTTRAIN_URL = os.getenv("TESTTRAIN_URL", "https://testtrain.io")
 TESTTRAIN_RUN_ID = os.getenv("TESTTRAIN_RUN_ID")
 TESTTRAIN_AUTH_TOKEN = os.getenv("TESTTRAIN_AUTH_TOKEN")
 
