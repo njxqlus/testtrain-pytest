@@ -8,6 +8,10 @@ __pycache__/
 .coverage
 coverage.xml
 
+# Allure
+allure-results/
+allure-report/
+
 # Distribution / packaging
 build/
 develop-eggs/
