@@ -198,12 +198,25 @@ def _extract_metadata(item):
         })
     
     allure_links = []
+    seen_urls = set()
     for mark in item.iter_markers(name="allure_link"):
         if mark.kwargs.get("link_type") == "issue":
-            issue = {"url": mark.args[0] if mark.args else ""}
+            url = mark.args[0] if mark.args else ""
+            if url not in seen_urls:
+                issue = {"url": url}
+                if mark.kwargs.get("name"):
+                    issue["name"] = mark.kwargs["name"]
+                allure_links.append(issue)
+                seen_urls.add(url)
+
+    for mark in item.iter_markers(name="issue"):
+        url = str(mark.args[0]) if mark.args else ""
+        if url not in seen_urls:
+            issue = {"url": url}
             if mark.kwargs.get("name"):
                 issue["name"] = mark.kwargs["name"]
             allure_links.append(issue)
+            seen_urls.add(url)
 
     allure_labels = []
     try:
