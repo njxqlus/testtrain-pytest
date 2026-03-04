@@ -89,25 +89,32 @@ def pytest_runtest_makereport(item, call):
     Capture metadata and attach to the report object for xdist-safe reporting.
     We use a hookwrapper to ensure we have access to the resulting report.
     """
-    outcome = yield
-    report = outcome.get_result()
-    
-    if not item.config._testtrain_enabled:
-        return
+    try:
+        outcome = yield
+        report = outcome.get_result()
+        
+        if not getattr(item.config, "_testtrain_enabled", False):
+            return
 
-    # Phase-specific metadata capture (only on worker/local)
-    if call.when == "call":
-        _extract_metadata(item)
-    
-    # Bundle data for serialization. We use user_properties as it's automatically 
-    # handled by pytest-xdist when sending reports from worker to controller.
-    data = {
-        "start_time": item.config._test_start_times.get(item.nodeid),
-        "finished_at": _utc_now_iso(),
-        "meta": item.config._test_meta_stash.get(item.nodeid, {}),
-        "name": _get_allure_title() or report.nodeid
-    }
-    report.user_properties.append(("testtrain_data", data))
+        # Phase-specific metadata capture (only on worker/local)
+        if call.when == "call":
+            _extract_metadata(item)
+        
+        # Bundle data for serialization. We use user_properties as it's automatically 
+        # handled by pytest-xdist when sending reports from worker to controller.
+        data = {
+            "start_time": getattr(item.config, "_test_start_times", {}).get(item.nodeid),
+            "finished_at": _utc_now_iso(),
+            "meta": getattr(item.config, "_test_meta_stash", {}).get(item.nodeid, {}),
+            "name": _get_allure_title() or getattr(report, "nodeid", item.nodeid)
+        }
+        
+        if not hasattr(report, "user_properties"):
+            report.user_properties = []
+        report.user_properties.append(("testtrain_data", data))
+    except Exception as e:
+        # Avoid crashing pytest session if reporting logic fails
+        print(f"\n  ⚠️  Testtrain internal error: {e}")
 
 def pytest_runtest_logreport(report):
     """Send results to Testtrain after the phase completes."""
@@ -126,8 +133,12 @@ def pytest_runtest_logreport(report):
     else:
         return
 
-    # Extract bundled data from user_properties
-    data = next((v for k, v in report.user_properties if k == "testtrain_data"), {})
+    # Extract bundled data from user_properties safely
+    data = {}
+    for prop in getattr(report, "user_properties", []):
+        if isinstance(prop, tuple) and len(prop) == 2 and prop[0] == "testtrain_data":
+            data = prop[1]
+            break
     
     finished_at = data.get("finished_at") or _utc_now_iso()
     started_at = data.get("start_time") or finished_at
@@ -162,13 +173,10 @@ def pytest_runtest_logreport(report):
             timeout=10,
         )
         if not resp.ok:
-             print(f"\n  ❌ Failed to report to Testtrain: {resp.status_code}")
-             try:
-                 print(f"     Error: {resp.json().get('message', resp.text)}")
-             except:
-                 print(f"     Error: {resp.text}")
+             error_msg = resp.json().get('message', resp.text) if resp.content else resp.text
+             pytest.exit(f"\n❌ Testtrain: Failed to send test result (Status {resp.status_code}).\n   Error: {error_msg}\n   Aborting to ensure no results are lost.")
     except Exception as e:
-        print(f"\n  ⚠️  Error reporting to Testtrain: {e}")
+        pytest.exit(f"\n❌ Testtrain: Connection error during reporting: {e}\n   Aborting to ensure no results are lost.")
 
 def _utc_now_iso() -> str:
     """Return current UTC time in ISO format with Z suffix."""
@@ -190,18 +198,28 @@ def _get_allure_title() -> str | None:
 
 def _extract_metadata(item):
     """Internal helper to pull Allure and Pytest markers."""
-    markers = []
-    for m in item.iter_markers():
-        markers.append({
-            "name": m.name,
-            "args": [str(a) for a in m.args]
-        })
-    
-    allure_links = []
-    seen_urls = set()
-    for mark in item.iter_markers(name="allure_link"):
-        if mark.kwargs.get("link_type") == "issue":
-            url = mark.args[0] if mark.args else ""
+    try:
+        markers = []
+        for m in item.iter_markers():
+            markers.append({
+                "name": m.name,
+                "args": [str(a) for a in m.args]
+            })
+        
+        allure_links = []
+        seen_urls = set()
+        for mark in item.iter_markers(name="allure_link"):
+            if mark.kwargs.get("link_type") == "issue":
+                url = mark.args[0] if mark.args else ""
+                if url not in seen_urls:
+                    issue = {"url": url}
+                    if mark.kwargs.get("name"):
+                        issue["name"] = mark.kwargs["name"]
+                    allure_links.append(issue)
+                    seen_urls.add(url)
+
+        for mark in item.iter_markers(name="issue"):
+            url = str(mark.args[0]) if mark.args else ""
             if url not in seen_urls:
                 issue = {"url": url}
                 if mark.kwargs.get("name"):
@@ -209,29 +227,24 @@ def _extract_metadata(item):
                 allure_links.append(issue)
                 seen_urls.add(url)
 
-    for mark in item.iter_markers(name="issue"):
-        url = str(mark.args[0]) if mark.args else ""
-        if url not in seen_urls:
-            issue = {"url": url}
-            if mark.kwargs.get("name"):
-                issue["name"] = mark.kwargs["name"]
-            allure_links.append(issue)
-            seen_urls.add(url)
+        allure_labels = []
+        try:
+            import allure_commons
+            listener = next((p for p in allure_commons.plugin_manager.get_plugins() 
+                             if type(p).__name__ == "AllureListener"), None)
+            if listener:
+                res = listener.allure_logger.get_test(None)
+                if res:
+                    allure_labels = [{"name": getattr(l, "name", ""), "value": getattr(l, "value", "")} for l in getattr(res, "labels", [])]
+        except Exception:
+            pass
 
-    allure_labels = []
-    try:
-        import allure_commons
-        listener = next((p for p in allure_commons.plugin_manager.get_plugins() 
-                         if type(p).__name__ == "AllureListener"), None)
-        if listener:
-            res = listener.allure_logger.get_test(None)
-            if res:
-                allure_labels = [{"name": l.name, "value": l.value} for l in res.labels]
+        if not hasattr(item.config, "_test_meta_stash"):
+            item.config._test_meta_stash = {}
+        item.config._test_meta_stash[item.nodeid] = {
+            "markers": markers,
+            "allure_labels": allure_labels,
+            "allure_links": allure_links,
+        }
     except Exception:
         pass
-
-    item.config._test_meta_stash[item.nodeid] = {
-        "markers": markers,
-        "allure_labels": allure_labels,
-        "allure_links": allure_links,
-    }
