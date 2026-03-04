@@ -214,7 +214,7 @@ def _extract_metadata(item):
                 if url not in seen_urls:
                     issue = {"url": url}
                     if mark.kwargs.get("name"):
-                        issue["name"] = mark.kwargs["name"]
+                        issue["name"] = str(mark.kwargs["name"])
                     allure_links.append(issue)
                     seen_urls.add(url)
 
@@ -223,7 +223,7 @@ def _extract_metadata(item):
             if url not in seen_urls:
                 issue = {"url": url}
                 if mark.kwargs.get("name"):
-                    issue["name"] = mark.kwargs["name"]
+                    issue["name"] = str(mark.kwargs["name"])
                 allure_links.append(issue)
                 seen_urls.add(url)
 
@@ -235,7 +235,7 @@ def _extract_metadata(item):
             if listener:
                 res = listener.allure_logger.get_test(None)
                 if res:
-                    allure_labels = [{"name": getattr(l, "name", ""), "value": getattr(l, "value", "")} for l in getattr(res, "labels", [])]
+                    allure_labels = [{"name": str(getattr(l, "name", "")), "value": str(getattr(l, "value", ""))} for l in getattr(res, "labels", [])]
         except Exception:
             pass
 
