@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -162,21 +163,34 @@ def pytest_runtest_logreport(report):
         "output": output or ""
     }
 
-    try:
-        resp = requests.post(
-            f"{config._testtrain_url}/api/tests",
-            json={"tests": [test_entry]},
-            headers={
-                "Authorization": f"Bearer {config._testtrain_auth_token}",
-                "Content-Type": "application/json",
-            },
-            timeout=10,
-        )
-        if not resp.ok:
-             error_msg = resp.json().get('message', resp.text) if resp.content else resp.text
-             pytest.exit(f"\n❌ Testtrain: Failed to send test result (Status {resp.status_code}).\n   Error: {error_msg}\n   Aborting to ensure no results are lost.")
-    except Exception as e:
-        pytest.exit(f"\n❌ Testtrain: Connection error during reporting: {e}\n   Aborting to ensure no results are lost.")
+    max_retries = 3
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.post(
+                f"{config._testtrain_url}/api/tests",
+                json={"tests": [test_entry]},
+                headers={
+                    "Authorization": f"Bearer {config._testtrain_auth_token}",
+                    "Content-Type": "application/json",
+                },
+                timeout=10,
+            )
+            if not resp.ok:
+                error_msg = resp.json().get('message', resp.text) if resp.content else resp.text
+                if 400 <= resp.status_code < 500:
+                    pytest.exit(f"\n❌ Testtrain: Failed to send test result (Status {resp.status_code}).\n   Error: {error_msg}\n   Aborting to ensure no results are lost.")
+                else:
+                    if attempt < max_retries:
+                        time.sleep(10)
+                        continue
+                    pytest.exit(f"\n❌ Testtrain: Failed to send test result after {max_retries + 1} attempts (Status {resp.status_code}).\n   Error: {error_msg}\n   Aborting to ensure no results are lost.")
+            else:
+                break
+        except Exception as e:
+            if attempt < max_retries:
+                time.sleep(10)
+                continue
+            pytest.exit(f"\n❌ Testtrain: Connection error during reporting after {max_retries + 1} attempts: {e}\n   Aborting to ensure no results are lost.")
 
 def _utc_now_iso() -> str:
     """Return current UTC time in ISO format with Z suffix."""
