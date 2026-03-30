@@ -76,3 +76,23 @@ pytest --alluredir=allure-results
 ```
 
 Without the `--alluredir` flag, Allure metadata will not be available to the Testtrain plugin during the test run.
+
+## Running Tests
+
+To verify that the plugin correctly handles Allure fields and reports to Testtrain, you can run the provided test suite. These tests use `pytester` to simulate real test runs and verify that the plugin sends the correct data without making real network requests.
+
+### Prerequisites
+
+Install the development dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+### Run Allure Reporting Tests
+
+```bash
+# Set PYTHONPATH to include the current directory so the tests can find the plugin
+export PYTHONPATH=$PYTHONPATH:.
+pytest -v -p pytester tests/test_allure_titles.py
+```
