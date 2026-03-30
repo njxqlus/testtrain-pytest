@@ -83,16 +83,16 @@ To verify that the plugin correctly handles Allure fields and reports to Testtra
 
 ### Prerequisites
 
-Install the development dependencies:
+Install the development dependencies and fix the environment:
 
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ### Run Allure Reporting Tests
 
 ```bash
-# Set PYTHONPATH to include the current directory so the tests can find the plugin
+# Ensure current directory is in PYTHONPATH
 export PYTHONPATH=$PYTHONPATH:.
-pytest -v -p pytester tests/test_allure_titles.py
+uv run pytest -v -p pytester tests/
 ```

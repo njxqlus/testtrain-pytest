@@ -50,3 +50,5 @@ env/
 # OS config
 .DS_Store
 Thumbs.db
+
+.ruff_cache/

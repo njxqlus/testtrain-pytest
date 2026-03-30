@@ -12,57 +12,69 @@ _STATE_MAP = {
     "skipped": "skipped",
 }
 
+
 def pytest_addoption(parser):
     """Register configuration options and INI settings."""
     group = parser.getgroup("testtrain", "Testtrain reporting")
-    
+
     # Command line options
-    group.addoption("--testtrain-url", help="Platform base URL (default: https://testtrain.io)")
+    group.addoption(
+        "--testtrain-url", help="Platform base URL (default: https://testtrain.io)"
+    )
     group.addoption("--testtrain-run-id", help="UUID of an existing testrun")
     group.addoption("--testtrain-auth-token", help="Bearer auth token")
-    
+
     # INI settings (allows putting these in pytest.ini or pyproject.toml)
     parser.addini("testtrain_url", help="Platform base URL")
     parser.addini("testtrain_run_id", help="UUID of an existing testrun")
     parser.addini("testtrain_auth_token", help="Bearer auth token")
 
+
 _PLUGIN_CONFIG = None
+
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
     """Initialize configuration."""
     global _PLUGIN_CONFIG
     _PLUGIN_CONFIG = config
-    
+
     # 1. Extract values with priority: CLI > Config File > Environment Variable > Default
-    url = (config.getoption("--testtrain-url") or 
-           config.getini("testtrain_url") or 
-           os.getenv("TESTTRAIN_URL") or 
-           "https://testtrain.io")
-    
-    run_id = (config.getoption("--testtrain-run-id") or 
-              config.getini("testtrain_run_id") or 
-              os.getenv("TESTTRAIN_RUN_ID"))
-    
-    auth_token = (config.getoption("--testtrain-auth-token") or 
-                  config.getini("testtrain_auth_token") or 
-                  os.getenv("TESTTRAIN_AUTH_TOKEN"))
+    url = (
+        config.getoption("--testtrain-url")
+        or config.getini("testtrain_url")
+        or os.getenv("TESTTRAIN_URL")
+        or "https://testtrain.io"
+    )
+
+    run_id = (
+        config.getoption("--testtrain-run-id")
+        or config.getini("testtrain_run_id")
+        or os.getenv("TESTTRAIN_RUN_ID")
+    )
+
+    auth_token = (
+        config.getoption("--testtrain-auth-token")
+        or config.getini("testtrain_auth_token")
+        or os.getenv("TESTTRAIN_AUTH_TOKEN")
+    )
 
     # 2. Store on the config object for later hooks to access
     config._testtrain_url = url.rstrip("/")
     config._testtrain_run_id = run_id
     config._testtrain_auth_token = auth_token
     config._testtrain_enabled = bool(run_id and auth_token)
-    
+
     # 3. Storage for test lifecycle tracking
     # Each worker (or the main session) has its own storage
     config._test_start_times = {}
     config._test_meta_stash = {}
 
+
 def pytest_sessionstart(session):
     """Inform user about reporting status at start of session."""
     config = session.config
-    
+
     # Only print on the controller, not on workers
     if hasattr(config, "workerinput"):
         return
@@ -72,17 +84,21 @@ def pytest_sessionstart(session):
         print(f"   Testrun ID: {config._testtrain_run_id}\n")
     else:
         missing = []
-        if not config._testtrain_run_id: missing.append("TESTTRAIN_RUN_ID")
-        if not config._testtrain_auth_token: missing.append("TESTTRAIN_AUTH_TOKEN")
-        
+        if not config._testtrain_run_id:
+            missing.append("TESTTRAIN_RUN_ID")
+        if not config._testtrain_auth_token:
+            missing.append("TESTTRAIN_AUTH_TOKEN")
+
         if len(missing) < 2 or config.getoption("--testtrain-url"):
-             print(f"\n⚠️  Testtrain: reporting disabled. Missing: {', '.join(missing)}")
+            print(f"\n⚠️  Testtrain: reporting disabled. Missing: {', '.join(missing)}")
+
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item):
     """Record test start time."""
     if item.config._testtrain_enabled:
         item.config._test_start_times[item.nodeid] = _utc_now_iso()
+
 
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)
 def pytest_runtest_makereport(item, call):
@@ -93,29 +109,32 @@ def pytest_runtest_makereport(item, call):
     try:
         outcome = yield
         report = outcome.get_result()
-        
+
         if not getattr(item.config, "_testtrain_enabled", False):
             return
 
         # Phase-specific metadata capture (only on worker/local)
         if call.when == "call":
             _extract_metadata(item)
-        
-        # Bundle data for serialization. We use user_properties as it's automatically 
+
+        # Bundle data for serialization. We use user_properties as it's automatically
         # handled by pytest-xdist when sending reports from worker to controller.
         data = {
-            "start_time": getattr(item.config, "_test_start_times", {}).get(item.nodeid),
+            "start_time": getattr(item.config, "_test_start_times", {}).get(
+                item.nodeid
+            ),
             "finished_at": _utc_now_iso(),
             "meta": getattr(item.config, "_test_meta_stash", {}).get(item.nodeid, {}),
-            "name": _get_allure_title() or getattr(report, "nodeid", item.nodeid)
+            "name": _get_allure_title() or getattr(report, "nodeid", item.nodeid),
         }
-        
+
         if not hasattr(report, "user_properties"):
             report.user_properties = []
         report.user_properties.append(("testtrain_data", data))
     except Exception as e:
         # Avoid crashing pytest session if reporting logic fails
         print(f"\n  ⚠️  Testtrain internal error: {e}")
+
 
 def pytest_runtest_logreport(report):
     """Send results to Testtrain after the phase completes."""
@@ -129,7 +148,9 @@ def pytest_runtest_logreport(report):
         return
 
     # We report on 'call' (the test body) or if setup failed (which marks the test as failed/skipped)
-    if report.when == "call" or (report.when == "setup" and (report.skipped or report.failed)):
+    if report.when == "call" or (
+        report.when == "setup" and (report.skipped or report.failed)
+    ):
         pass
     else:
         return
@@ -140,19 +161,19 @@ def pytest_runtest_logreport(report):
         if isinstance(prop, tuple) and len(prop) == 2 and prop[0] == "testtrain_data":
             data = prop[1]
             break
-    
+
     finished_at = data.get("finished_at") or _utc_now_iso()
     started_at = data.get("start_time") or finished_at
     meta = data.get("meta") or {}
     computed_name = data.get("name") or report.nodeid
     description = meta.get("allure_description")
     state = _STATE_MAP.get(report.outcome, "failed")
-    
+
     # Capture failure output if exists
     output = None
     if report.failed:
         output = report.longreprtext
-    
+
     test_entry = {
         "testrunId": config._testtrain_run_id,
         "name": computed_name,
@@ -162,7 +183,7 @@ def pytest_runtest_logreport(report):
         "finishedAt": finished_at,
         "description": description,
         "defects": meta.get("allure_links", []),
-        "output": output or ""
+        "output": output or "",
     }
 
     max_retries = 3
@@ -178,32 +199,49 @@ def pytest_runtest_logreport(report):
                 timeout=10,
             )
             if not resp.ok:
-                error_msg = resp.json().get('message', resp.text) if resp.content else resp.text
+                error_msg = (
+                    resp.json().get("message", resp.text) if resp.content else resp.text
+                )
                 if 400 <= resp.status_code < 500:
-                    pytest.exit(f"\n❌ Testtrain: Failed to send test result (Status {resp.status_code}).\n   Error: {error_msg}\n   Aborting to ensure no results are lost.")
+                    pytest.exit(
+                        f"\n❌ Testtrain: Failed to send test result (Status {resp.status_code}).\n   Error: {error_msg}\n   Aborting to ensure no results are lost."
+                    )
                 else:
                     if attempt < max_retries:
                         time.sleep(10)
                         continue
-                    pytest.exit(f"\n❌ Testtrain: Failed to send test result after {max_retries + 1} attempts (Status {resp.status_code}).\n   Error: {error_msg}\n   Aborting to ensure no results are lost.")
+                    pytest.exit(
+                        f"\n❌ Testtrain: Failed to send test result after {max_retries + 1} attempts (Status {resp.status_code}).\n   Error: {error_msg}\n   Aborting to ensure no results are lost."
+                    )
             else:
                 break
         except Exception as e:
             if attempt < max_retries:
                 time.sleep(10)
                 continue
-            pytest.exit(f"\n❌ Testtrain: Connection error during reporting after {max_retries + 1} attempts: {e}\n   Aborting to ensure no results are lost.")
+            pytest.exit(
+                f"\n❌ Testtrain: Connection error during reporting after {max_retries + 1} attempts: {e}\n   Aborting to ensure no results are lost."
+            )
+
 
 def _utc_now_iso() -> str:
     """Return current UTC time in ISO format with Z suffix."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
+
 def _get_allure_title() -> str | None:
     """Attempts to extract the current test's Allure title."""
     try:
         import allure_commons
-        listener = next((p for p in allure_commons.plugin_manager.get_plugins() 
-                         if type(p).__name__ == "AllureListener"), None)
+
+        listener = next(
+            (
+                p
+                for p in allure_commons.plugin_manager.get_plugins()
+                if type(p).__name__ == "AllureListener"
+            ),
+            None,
+        )
         if listener:
             test_result = listener.allure_logger.get_test(None)
             if test_result and test_result.name:
@@ -212,16 +250,14 @@ def _get_allure_title() -> str | None:
         pass
     return None
 
+
 def _extract_metadata(item):
     """Internal helper to pull Allure and Pytest markers."""
     try:
         markers = []
         for m in item.iter_markers():
-            markers.append({
-                "name": m.name,
-                "args": [str(a) for a in m.args]
-            })
-        
+            markers.append({"name": m.name, "args": [str(a) for a in m.args]})
+
         allure_links = []
         seen_urls = set()
         for mark in item.iter_markers(name="allure_link"):
@@ -246,13 +282,28 @@ def _extract_metadata(item):
         allure_description = None
         try:
             import allure_commons
-            listener = next((p for p in allure_commons.plugin_manager.get_plugins() 
-                             if type(p).__name__ == "AllureListener"), None)
+
+            listener = next(
+                (
+                    p
+                    for p in allure_commons.plugin_manager.get_plugins()
+                    if type(p).__name__ == "AllureListener"
+                ),
+                None,
+            )
             if listener:
                 res = listener.allure_logger.get_test(None)
                 if res:
-                    allure_labels = [{"name": str(getattr(l, "name", "")), "value": str(getattr(l, "value", ""))} for l in getattr(res, "labels", [])]
-                    allure_description = str(res.description) if res.description else None
+                    allure_labels = [
+                        {
+                            "name": str(getattr(label, "name", "")),
+                            "value": str(getattr(label, "value", "")),
+                        }
+                        for label in getattr(res, "labels", [])
+                    ]
+                    allure_description = (
+                        str(res.description) if res.description else None
+                    )
         except Exception:
             pass
 

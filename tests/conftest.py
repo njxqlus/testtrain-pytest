@@ -2,6 +2,7 @@ import pytest
 
 pytest_plugins = ["pytester"]
 
+
 @pytest.fixture
 def test_env(pytester, request):
     """
@@ -12,10 +13,10 @@ def test_env(pytester, request):
     root_dir = request.config.rootpath
     plugin_path = root_dir / "testtrain_pytest.py"
     plugin_content = plugin_path.read_text()
-    
+
     # 2. Create the plugin file in the sandbox with a unique name to avoid module shadowing
     pytester.makepyfile(testtrain_sandbox=plugin_content)
-    
+
     # 3. Setup mock and configuration in a conftest.py within the sandbox
     pytester.makeconftest("""
         import pytest

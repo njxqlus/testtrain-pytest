@@ -8,3 +8,7 @@ The project uses `pytester` for integration tests.
 - **Isolation**: Each test runs in a temporary environment using the `pytester` fixture.
 - **Mocking**: API calls to `requests.post` are intercepted via `monkeypatch`.
 - **Verification**: Sent data is written to a local `api_calls.json` within the sandbox and then verified for correctness (e.g., node IDs, Allure titles).
+
+## Quality Control
+Always run `uv run ruff check .` and `uv run ruff format .` after making changes to ensure code quality and consistency.
+Dependencies are managed via `uv` using `pyproject.toml` and `uv.lock`.

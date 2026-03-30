@@ -1,4 +1,0 @@
-pytest
-allure-pytest
-requests
-pytest-mock

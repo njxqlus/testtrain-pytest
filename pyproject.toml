@@ -12,7 +12,8 @@ requires-python = ">=3.8"
 dependencies = [
     "pytest>=7.0.0",
     "requests",
-    "allure-pytest"
+    "allure-pytest",
+    "pytest-mock>=3.14.1",
 ]
 classifiers = [
     "Framework :: Pytest",
@@ -23,3 +24,8 @@ classifiers = [
 
 [project.entry-points."pytest11"]
 testtrain = "testtrain_pytest"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.8",
+]
