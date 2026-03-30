@@ -145,6 +145,7 @@ def pytest_runtest_logreport(report):
     started_at = data.get("start_time") or finished_at
     meta = data.get("meta") or {}
     computed_name = data.get("name") or report.nodeid
+    description = meta.get("allure_description")
     state = _STATE_MAP.get(report.outcome, "failed")
     
     # Capture failure output if exists
@@ -159,6 +160,7 @@ def pytest_runtest_logreport(report):
         "state": state,
         "startedAt": started_at,
         "finishedAt": finished_at,
+        "description": description,
         "defects": meta.get("allure_links", []),
         "output": output or ""
     }
@@ -241,7 +243,7 @@ def _extract_metadata(item):
                 allure_links.append(issue)
                 seen_urls.add(url)
 
-        allure_labels = []
+        allure_description = None
         try:
             import allure_commons
             listener = next((p for p in allure_commons.plugin_manager.get_plugins() 
@@ -250,6 +252,7 @@ def _extract_metadata(item):
                 res = listener.allure_logger.get_test(None)
                 if res:
                     allure_labels = [{"name": str(getattr(l, "name", "")), "value": str(getattr(l, "value", ""))} for l in getattr(res, "labels", [])]
+                    allure_description = str(res.description) if res.description else None
         except Exception:
             pass
 
@@ -259,6 +262,7 @@ def _extract_metadata(item):
             "markers": markers,
             "allure_labels": allure_labels,
             "allure_links": allure_links,
+            "allure_description": allure_description,
         }
     except Exception:
         pass
