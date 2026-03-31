@@ -23,11 +23,18 @@ def pytest_addoption(parser):
     )
     group.addoption("--testtrain-run-id", help="UUID of an existing testrun")
     group.addoption("--testtrain-auth-token", help="Bearer auth token")
+    group.addoption(
+        "--testtrain-create-tag",
+        help="Create tags if they do not exist on the platform (default: true)",
+    )
 
     # INI settings (allows putting these in pytest.ini or pyproject.toml)
     parser.addini("testtrain_url", help="Platform base URL")
     parser.addini("testtrain_run_id", help="UUID of an existing testrun")
     parser.addini("testtrain_auth_token", help="Bearer auth token")
+    parser.addini(
+        "testtrain_create_tag", help="Create tags if they do not exist on the platform"
+    )
 
 
 _PLUGIN_CONFIG = None
@@ -59,23 +66,30 @@ def pytest_configure(config):
         or os.getenv("TESTTRAIN_AUTH_TOKEN")
     )
 
+    create_tag = (
+        config.getoption("--testtrain-create-tag")
+        or config.getini("testtrain_create_tag")
+        or os.getenv("TESTTRAIN_CREATE_TAG")
+        or "true"
+    )
+
     # 2. Store on the config object for later hooks to access
     config._testtrain_url = url.rstrip("/")
     config._testtrain_run_id = run_id
     config._testtrain_auth_token = auth_token
+    config._testtrain_create_tag = str(create_tag).lower() == "true"
     config._testtrain_enabled = bool(run_id and auth_token)
 
     # 3. Storage for test lifecycle tracking
-    # Each worker (or the main session) has its own storage
     config._test_start_times = {}
     config._test_meta_stash = {}
+    config._test_outcome_stash = {}
 
 
 def pytest_sessionstart(session):
     """Inform user about reporting status at start of session."""
     config = session.config
 
-    # Only print on the controller, not on workers
     if hasattr(config, "workerinput"):
         return
 
@@ -103,8 +117,7 @@ def pytest_runtest_setup(item):
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)
 def pytest_runtest_makereport(item, call):
     """
-    Capture metadata and attach to the report object for xdist-safe reporting.
-    We use a hookwrapper to ensure we have access to the resulting report.
+    Capture metadata and outcome across all phases and attach to teardown for reporting.
     """
     try:
         outcome = yield
@@ -113,26 +126,58 @@ def pytest_runtest_makereport(item, call):
         if not getattr(item.config, "_testtrain_enabled", False):
             return
 
-        # Phase-specific metadata capture (only on worker/local)
-        if call.when == "call":
-            _extract_metadata(item)
+        # 1. Capture metadata for the current phase
+        _extract_metadata(item)
 
-        # Bundle data for serialization. We use user_properties as it's automatically
-        # handled by pytest-xdist when sending reports from worker to controller.
-        data = {
-            "start_time": getattr(item.config, "_test_start_times", {}).get(
-                item.nodeid
-            ),
-            "finished_at": _utc_now_iso(),
-            "meta": getattr(item.config, "_test_meta_stash", {}).get(item.nodeid, {}),
-            "name": _get_allure_title() or getattr(report, "nodeid", item.nodeid),
-        }
+        # 2. Accumulate overall test state
+        if item.nodeid not in item.config._test_outcome_stash:
+            item.config._test_outcome_stash[item.nodeid] = {
+                "outcome": "passed",
+                "longrepr": None,
+                "reported": False,
+            }
 
-        if not hasattr(report, "user_properties"):
-            report.user_properties = []
-        report.user_properties.append(("testtrain_data", data))
+        stash = item.config._test_outcome_stash[item.nodeid]
+        if report.failed:
+            # Prefer body/setup failures over teardown failures
+            if stash["outcome"] != "failed" or report.when != "teardown":
+                stash["outcome"] = "failed"
+                stash["longrepr"] = report.longreprtext
+        elif report.skipped and stash["outcome"] == "passed":
+            stash["outcome"] = "skipped"
+
+        # 3. Attach data to the report for final delivery.
+        # We report on teardown, OR on setup if skipped/failed (teardown won't run or we want early info).
+        # We ensure only one report is ever sent via 'reported' flag.
+        should_report = False
+        if report.when == "teardown":
+            should_report = True
+        elif report.when == "setup" and (report.skipped or report.failed):
+            should_report = True
+
+        if should_report and not stash["reported"]:
+            stash["reported"] = True
+            current_meta = getattr(item.config, "_test_meta_stash", {}).get(
+                item.nodeid, {}
+            )
+            allure_title = _get_allure_title()
+
+            data = {
+                "start_time": getattr(item.config, "_test_start_times", {}).get(
+                    item.nodeid
+                ),
+                "finished_at": _utc_now_iso(),
+                "meta": current_meta,
+                "allure_title": allure_title,
+                "name": item.nodeid,
+                "outcome": stash["outcome"],
+                "longrepr": stash["longrepr"],
+            }
+
+            if not hasattr(report, "user_properties"):
+                report.user_properties = []
+            report.user_properties.append(("testtrain_data", data))
     except Exception as e:
-        # Avoid crashing pytest session if reporting logic fails
         print(f"\n  ⚠️  Testtrain internal error: {e}")
 
 
@@ -142,15 +187,15 @@ def pytest_runtest_logreport(report):
     if not config or not getattr(config, "_testtrain_enabled", False):
         return
 
-    # In xdist, we only want to report from the controller to avoid duplicates.
-    # On workers, we skip this hook.
     if hasattr(config, "workerinput"):
         return
 
-    # We report on 'call' (the test body) or if setup failed (which marks the test as failed/skipped)
-    if report.when == "call" or (
-        report.when == "setup" and (report.skipped or report.failed)
-    ):
+    # We report on 'teardown' for most tests.
+    # However, for skipped tests, teardown might not run or we want to report early.
+    # To ensure exactly one report, we report on teardown, OR on setup if it skipped/failed.
+    if report.when == "teardown":
+        pass
+    elif report.when == "setup" and (report.skipped or report.failed):
         pass
     else:
         return
@@ -162,17 +207,21 @@ def pytest_runtest_logreport(report):
             data = prop[1]
             break
 
+    if not data:
+        return
+
     finished_at = data.get("finished_at") or _utc_now_iso()
     started_at = data.get("start_time") or finished_at
     meta = data.get("meta") or {}
-    computed_name = data.get("name") or report.nodeid
+    computed_name = data.get("allure_title") or data.get("name") or report.nodeid
     description = meta.get("allure_description")
-    state = _STATE_MAP.get(report.outcome, "failed")
+    state = _STATE_MAP.get(data.get("outcome"), "failed")
 
-    # Capture failure output if exists
-    output = None
-    if report.failed:
-        output = report.longreprtext
+    # Capture Allure tags
+    tags = []
+    for label in meta.get("allure_labels", []):
+        if label.get("name") == "tag":
+            tags.append(label.get("value"))
 
     test_entry = {
         "testrunId": config._testtrain_run_id,
@@ -183,7 +232,9 @@ def pytest_runtest_logreport(report):
         "finishedAt": finished_at,
         "description": description,
         "defects": meta.get("allure_links", []),
-        "output": output or "",
+        "tags": tags,
+        "create_tag_if_not_exists": config._testtrain_create_tag,
+        "output": data.get("longrepr") or "",
     }
 
     max_retries = 3
@@ -254,9 +305,22 @@ def _get_allure_title() -> str | None:
 def _extract_metadata(item):
     """Internal helper to pull Allure and Pytest markers."""
     try:
+        if not hasattr(item.config, "_test_meta_stash"):
+            item.config._test_meta_stash = {}
+        if item.nodeid not in item.config._test_meta_stash:
+            item.config._test_meta_stash[item.nodeid] = {
+                "markers": [],
+                "allure_labels": [],
+                "allure_links": [],
+                "allure_description": None,
+            }
+
+        stash = item.config._test_meta_stash[item.nodeid]
+
         markers = []
         for m in item.iter_markers():
             markers.append({"name": m.name, "args": [str(a) for a in m.args]})
+        stash["markers"] = markers
 
         allure_links = []
         seen_urls = set()
@@ -278,8 +342,8 @@ def _extract_metadata(item):
                     issue["name"] = str(mark.kwargs["name"])
                 allure_links.append(issue)
                 seen_urls.add(url)
+        stash["allure_links"] = allure_links
 
-        allure_description = None
         try:
             import allure_commons
 
@@ -301,19 +365,11 @@ def _extract_metadata(item):
                         }
                         for label in getattr(res, "labels", [])
                     ]
-                    allure_description = (
-                        str(res.description) if res.description else None
-                    )
+                    stash["allure_labels"] = allure_labels
+                    if res.description:
+                        stash["allure_description"] = str(res.description)
         except Exception:
             pass
 
-        if not hasattr(item.config, "_test_meta_stash"):
-            item.config._test_meta_stash = {}
-        item.config._test_meta_stash[item.nodeid] = {
-            "markers": markers,
-            "allure_labels": allure_labels,
-            "allure_links": allure_links,
-            "allure_description": allure_description,
-        }
     except Exception:
         pass
