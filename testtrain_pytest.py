@@ -297,8 +297,7 @@ def _get_allure_result_data() -> dict:
                 for p in plugins
                 if type(p).__name__ == "AllureListener"
                 or (
-                    hasattr(p, "allure_logger")
-                    and hasattr(p.allure_logger, "get_test")
+                    hasattr(p, "allure_logger") and hasattr(p.allure_logger, "get_test")
                 )
             ),
             None,
