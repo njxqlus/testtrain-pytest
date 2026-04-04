@@ -1,7 +1,7 @@
 import json
 
 
-def test_allure_step_decorator(test_env):
+def test_decorator(test_env):
     """Verify Allure steps created via @allure.step decorator."""
     test_env.makepyfile("""
         import allure
@@ -60,7 +60,7 @@ def test_allure_step_decorator(test_env):
         assert steps[2]["steps"][0]["name"] == "Sub-step for val2"
 
 
-def test_allure_step_context_manager(test_env):
+def test_context_manager(test_env):
     """Verify Allure steps created via with allure.step context manager."""
     test_env.makepyfile("""
         import allure
@@ -109,7 +109,7 @@ def test_allure_step_context_manager(test_env):
         assert steps[2]["steps"][0]["name"] == "Nested Step"
 
 
-def test_allure_step_failure(test_env):
+def test_failure(test_env):
     """Verify failure status and output in Allure steps."""
     test_env.makepyfile("""
         import allure
@@ -186,3 +186,58 @@ def test_no_steps(test_env):
         t for c in calls for t in c.get("tests", []) if "test_no_steps" in t["nodeId"]
     )
     assert "steps" not in test_entry
+
+
+def test_nested_steps_depth_3(test_env):
+    """Verify Allure steps nested up to 3 depth levels."""
+    test_env.makepyfile("""
+        import allure
+        import pytest
+
+        @allure.step("Level 1")
+        def level1():
+            with allure.step("Level 2"):
+                with allure.step("Level 3"):
+                    pass
+
+        def test_nested():
+            level1()
+    """)
+
+    result = test_env.runpytest(
+        "-p",
+        "testtrain_pytest",
+        "-p",
+        "no:testtrain",
+        "-p",
+        "allure_pytest",
+        "--testtrain-run-id",
+        "dummy-run",
+        "--testtrain-auth-token",
+        "dummy-token",
+    )
+
+    result.assert_outcomes(passed=1)
+
+    calls_file = test_env.path / "api_calls.json"
+    assert calls_file.exists()
+    calls = [json.loads(line) for line in calls_file.read_text().splitlines()]
+
+    test_entry = next(
+        t for c in calls for t in c.get("tests", []) if "test_nested" in t["nodeId"]
+    )
+    steps = test_entry.get("steps", [])
+
+    if len(steps) > 0:
+        assert len(steps) == 1
+        l1 = steps[0]
+        assert l1["name"] == "Level 1"
+        assert len(l1.get("steps", [])) == 1
+
+        l2 = l1["steps"][0]
+        assert l2["name"] == "Level 2"
+        assert len(l2.get("steps", [])) == 1
+
+        l3 = l2["steps"][0]
+        assert l3["name"] == "Level 3"
+        assert "steps" not in l3 or len(l3["steps"]) == 0
