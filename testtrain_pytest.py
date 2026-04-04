@@ -160,7 +160,7 @@ def pytest_runtest_makereport(item, call):
             current_meta = getattr(item.config, "_test_meta_stash", {}).get(
                 item.nodeid, {}
             )
-            allure_title = _get_allure_title()
+            allure_data = _get_allure_result_data()
 
             data = {
                 "start_time": getattr(item.config, "_test_start_times", {}).get(
@@ -168,7 +168,8 @@ def pytest_runtest_makereport(item, call):
                 ),
                 "finished_at": _utc_now_iso(),
                 "meta": current_meta,
-                "allure_title": allure_title,
+                "allure_title": allure_data.get("name"),
+                "allure_steps": allure_data.get("steps"),
                 "name": item.nodeid,
                 "outcome": stash["outcome"],
                 "longrepr": stash["longrepr"],
@@ -237,6 +238,9 @@ def pytest_runtest_logreport(report):
         "output": data.get("longrepr") or "",
     }
 
+    if data.get("allure_steps"):
+        test_entry["steps"] = data.get("allure_steps")
+
     max_retries = 3
     for attempt in range(max_retries + 1):
         try:
@@ -280,26 +284,67 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-def _get_allure_title() -> str | None:
-    """Attempts to extract the current test's Allure title."""
+def _get_allure_result_data() -> dict:
+    """Attempts to extract the current test's Allure data (name, steps)."""
+    res = {"name": None, "steps": None}
     try:
         import allure_commons
 
+        plugins = allure_commons.plugin_manager.get_plugins()
         listener = next(
             (
                 p
-                for p in allure_commons.plugin_manager.get_plugins()
+                for p in plugins
                 if type(p).__name__ == "AllureListener"
+                or (
+                    hasattr(p, "allure_logger") and hasattr(p.allure_logger, "get_test")
+                )
             ),
             None,
         )
+        if not listener:
+            # Fallback for some environments where the listener might be hidden or named differently
+            for p in plugins:
+                if hasattr(p, "allure_logger"):
+                    listener = p
+                    break
         if listener:
             test_result = listener.allure_logger.get_test(None)
-            if test_result and test_result.name:
-                return str(test_result.name)
+            if test_result:
+                if test_result.name:
+                    res["name"] = str(test_result.name)
+                if test_result.steps:
+                    res["steps"] = [_map_allure_step(s) for s in test_result.steps]
     except (ImportError, Exception):
         pass
-    return None
+    return res
+
+
+def _map_allure_step(step) -> dict:
+    """Recursively map Allure StepResult to Testtrain step format."""
+    from allure_commons.model2 import Status
+
+    output = None
+    if step.statusDetails:
+        output = ""
+        if step.statusDetails.message:
+            output += step.statusDetails.message
+        if step.statusDetails.trace:
+            if output:
+                output += "\n"
+            output += step.statusDetails.trace
+
+    mapped = {
+        "name": str(step.name) if step.name else "step",
+        "is_failed": step.status in (Status.FAILED, Status.BROKEN),
+        "duration": int(step.stop - step.start) if step.stop and step.start else 0,
+    }
+    if output:
+        mapped["output"] = output
+    if step.steps:
+        mapped["steps"] = [_map_allure_step(s) for s in step.steps]
+
+    return mapped
 
 
 def _extract_metadata(item):
