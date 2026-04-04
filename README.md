@@ -9,6 +9,12 @@ Sends each test result to the Testtrain platform API immediately after the test 
 You can install `testtrain-pytest` via pip:
 
 ```bash
+pip install testtrain-pytest
+```
+
+Alternatively, you can install the development version from GitHub:
+
+```bash
 pip install git+https://github.com/njxqlus/testtrain-pytest.git
 ```
 
@@ -92,7 +98,5 @@ uv sync
 ### Run Allure Reporting Tests
 
 ```bash
-# Ensure current directory is in PYTHONPATH
-export PYTHONPATH=$PYTHONPATH:.
 uv run pytest -v -p pytester tests/
 ```

@@ -27,6 +27,6 @@ jobs:
         
     - name: Run tests
       run: |
-        # Ensure current dir is in PYTHONPATH so pytester can find the plugin
-        export PYTHONPATH=$PYTHONPATH:.
+        # Ensure src dir is in PYTHONPATH so pytester can find the plugin
+        export PYTHONPATH=$PYTHONPATH:src
         uv run pytest -v -p pytester tests/

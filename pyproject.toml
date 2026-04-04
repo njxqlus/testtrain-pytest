@@ -25,6 +25,9 @@ classifiers = [
 [project.entry-points."pytest11"]
 testtrain = "testtrain_pytest"
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [dependency-groups]
 dev = [
     "ruff>=0.15.8",

@@ -11,7 +11,7 @@ def test_env(pytester, request):
     """
     # 1. Locate the actual plugin in the workspace
     root_dir = request.config.rootpath
-    plugin_path = root_dir / "testtrain_pytest.py"
+    plugin_path = root_dir / "src" / "testtrain_pytest" / "__init__.py"
     plugin_content = plugin_path.read_text()
 
     # 2. Create the plugin file in the sandbox with a unique name to avoid module shadowing
