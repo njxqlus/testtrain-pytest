@@ -231,12 +231,14 @@ def pytest_runtest_logreport(report):
         "state": state,
         "startedAt": started_at,
         "finishedAt": finished_at,
-        "description": description,
         "defects": meta.get("allure_links", []),
         "tags": tags,
         "create_tag_if_not_exists": config._testtrain_create_tag,
         "output": data.get("longrepr") or "",
     }
+
+    if description:
+        test_entry["description"] = str(description)
 
     if data.get("allure_steps"):
         test_entry["steps"] = data.get("allure_steps")
@@ -270,7 +272,7 @@ def pytest_runtest_logreport(report):
                     )
             else:
                 break
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             if attempt < max_retries:
                 time.sleep(10)
                 continue
