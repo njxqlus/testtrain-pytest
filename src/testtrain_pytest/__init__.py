@@ -170,6 +170,7 @@ def pytest_runtest_makereport(item, call):
                 "meta": current_meta,
                 "allure_title": allure_data.get("name"),
                 "allure_steps": allure_data.get("steps"),
+                "parameters": allure_data.get("parameters"),
                 "name": item.nodeid,
                 "outcome": stash["outcome"],
                 "longrepr": stash["longrepr"],
@@ -243,6 +244,9 @@ def pytest_runtest_logreport(report):
     if data.get("allure_steps"):
         test_entry["steps"] = data.get("allure_steps")
 
+    if data.get("parameters"):
+        test_entry["parameters"] = data.get("parameters")
+
     max_retries = 3
     for attempt in range(max_retries + 1):
         try:
@@ -287,8 +291,8 @@ def _utc_now_iso() -> str:
 
 
 def _get_allure_result_data() -> dict:
-    """Attempts to extract the current test's Allure data (name, steps)."""
-    res = {"name": None, "steps": None}
+    """Attempts to extract the current test's Allure data (name, steps, parameters)."""
+    res = {"name": None, "steps": None, "parameters": None}
     try:
         import allure_commons
 
@@ -313,10 +317,25 @@ def _get_allure_result_data() -> dict:
         if listener:
             test_result = listener.allure_logger.get_test(None)
             if test_result:
-                if test_result.name:
-                    res["name"] = str(test_result.name)
-                if test_result.steps:
-                    res["steps"] = [_map_allure_step(s) for s in test_result.steps]
+                test_name = getattr(test_result, "name", None)
+                if test_name:
+                    res["name"] = str(test_name)
+
+                test_parameters = getattr(test_result, "parameters", [])
+                if test_parameters:
+                    res["parameters"] = [
+                        {
+                            "name": getattr(p, "name", "param"),
+                            "value": str(getattr(p, "value", "")),
+                            "mode": str(getattr(p, "mode", "default") or "default"),
+                        }
+                        for p in test_parameters
+                        if str(getattr(p, "mode", "default") or "default") != "hidden"
+                    ]
+
+                test_steps = getattr(test_result, "steps", [])
+                if test_steps:
+                    res["steps"] = [_map_allure_step(s) for s in test_steps]
     except (ImportError, Exception):
         pass
     return res
@@ -327,24 +346,46 @@ def _map_allure_step(step) -> dict:
     from allure_commons.model2 import Status
 
     output = None
-    if step.statusDetails:
+    status_details = getattr(step, "statusDetails", None)
+    if status_details:
         output = ""
-        if step.statusDetails.message:
-            output += step.statusDetails.message
-        if step.statusDetails.trace:
+        msg = getattr(status_details, "message", None)
+        if msg:
+            output += str(msg)
+        trace = getattr(status_details, "trace", None)
+        if trace:
             if output:
                 output += "\n"
-            output += step.statusDetails.trace
+            output += str(trace)
+
+    step_name = getattr(step, "name", "step")
+    step_status = getattr(step, "status", Status.PASSED)
+    step_start = getattr(step, "start", 0)
+    step_stop = getattr(step, "stop", 0)
 
     mapped = {
-        "name": str(step.name) if step.name else "step",
-        "is_failed": step.status in (Status.FAILED, Status.BROKEN),
-        "duration": int(step.stop - step.start) if step.stop and step.start else 0,
+        "name": str(step_name),
+        "is_failed": step_status in (Status.FAILED, Status.BROKEN),
+        "duration": int(step_stop - step_start) if step_stop and step_start else 0,
     }
     if output:
         mapped["output"] = output
-    if step.steps:
-        mapped["steps"] = [_map_allure_step(s) for s in step.steps]
+
+    step_parameters = getattr(step, "parameters", [])
+    if step_parameters:
+        mapped["parameters"] = [
+            {
+                "name": getattr(p, "name", "param"),
+                "value": str(getattr(p, "value", "")),
+                "mode": str(getattr(p, "mode", "default") or "default"),
+            }
+            for p in step_parameters
+            if str(getattr(p, "mode", "default") or "default") != "hidden"
+        ]
+
+    step_substeps = getattr(step, "steps", [])
+    if step_substeps:
+        mapped["steps"] = [_map_allure_step(s) for s in step_substeps]
 
     return mapped
 
@@ -413,8 +454,9 @@ def _extract_metadata(item):
                         for label in getattr(res, "labels", [])
                     ]
                     stash["allure_labels"] = allure_labels
-                    if res.description:
-                        stash["allure_description"] = str(res.description)
+                    description = getattr(res, "description", None)
+                    if description:
+                        stash["allure_description"] = str(description)
         except Exception:
             pass
 
