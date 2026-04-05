@@ -324,9 +324,10 @@ def _get_allure_result_data() -> dict:
                         {
                             "name": p.name,
                             "value": str(p.value),
-                            "mode": getattr(p, "mode", "default"),
+                            "mode": str(getattr(p, "mode", "default") or "default"),
                         }
                         for p in test_result.parameters
+                        if str(getattr(p, "mode", "default") or "default") != "hidden"
                     ]
                 if test_result.steps:
                     res["steps"] = [_map_allure_step(s) for s in test_result.steps]
@@ -362,9 +363,10 @@ def _map_allure_step(step) -> dict:
             {
                 "name": p.name,
                 "value": str(p.value),
-                "mode": getattr(p, "mode", "default"),
+                "mode": str(getattr(p, "mode", "default") or "default"),
             }
             for p in step.parameters
+            if str(getattr(p, "mode", "default") or "default") != "hidden"
         ]
 
     if step.steps:

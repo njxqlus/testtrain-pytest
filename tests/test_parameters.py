@@ -1,23 +1,14 @@
 import json
 
 
-def test_parameters_extraction(test_env):
-    """Verify extraction of parameters from tests and steps."""
+def test_pytest_standard_parameter(test_env):
+    """Verify that normal pytest parameterization is captured."""
     test_env.makepyfile("""
-        import allure
         import pytest
-        from allure_commons.types import ParameterMode
-
-        @allure.step("Step with params")
-        def step_with_params(p1, p2):
+        @pytest.mark.parametrize("input_val", ["hello_world"])
+        def test_standard(input_val):
             pass
-
-        @pytest.mark.parametrize("login", ["johndoe"])
-        def test_parametrized(login):
-            step_with_params("val1", "val2")
-            allure.dynamic.parameter("dynamic_param", "dynamic_val", mode=ParameterMode.MASKED)
     """)
-
     result = test_env.runpytest(
         "-p",
         "testtrain_pytest",
@@ -32,42 +23,159 @@ def test_parameters_extraction(test_env):
         "--alluredir",
         "allure-results",
     )
-
     result.assert_outcomes(passed=1)
 
-    calls_file = test_env.path / "api_calls.json"
-    assert calls_file.exists()
-
-    with open(calls_file, "r") as f:
-        calls = [json.loads(line) for line in f]
+    with open(test_env.path / "api_calls.json", "r") as f:
+        lines = f.readlines()
+        calls = [json.loads(line) for line in lines if line.strip()]
 
     test_entry = next(
-        t
-        for c in calls
-        for t in c.get("tests", [])
-        if "test_parametrized" in t["nodeId"]
+        (
+            t
+            for c in calls
+            for t in c.get("tests", [])
+            if "test_standard" in t["nodeId"]
+        ),
+        None,
+    )
+    params = test_entry.get("parameters", [])
+    assert any(p["name"] == "input_val" and "hello_world" in p["value"] for p in params)
+
+
+def test_allure_dynamic_parameter(test_env):
+    """Verify that allure.dynamic.parameter is captured."""
+    test_env.makepyfile("""
+        import allure
+        def test_dynamic():
+            allure.dynamic.parameter("api_version", "v2")
+    """)
+    result = test_env.runpytest(
+        "-p",
+        "testtrain_pytest",
+        "-p",
+        "no:testtrain",
+        "-p",
+        "allure_pytest",
+        "--testtrain-run-id",
+        "dummy-run",
+        "--testtrain-auth-token",
+        "dummy-token",
+        "--alluredir",
+        "allure-results",
+    )
+    result.assert_outcomes(passed=1)
+
+    with open(test_env.path / "api_calls.json", "r") as f:
+        lines = f.readlines()
+        calls = [json.loads(line) for line in lines if line.strip()]
+
+    test_entry = next(
+        (t for c in calls for t in c.get("tests", []) if "test_dynamic" in t["nodeId"]),
+        None,
+    )
+    params = test_entry.get("parameters", [])
+    assert any(p["name"] == "api_version" and "v2" in p["value"] for p in params)
+
+
+def test_step_parameters(test_env):
+    """Verify that parameters in allure steps are captured."""
+    test_env.makepyfile("""
+        import allure
+        @allure.step("Execution Step")
+        def my_step(arg1):
+            pass
+            
+        def test_step_params():
+            my_step("secret_data")
+    """)
+    result = test_env.runpytest(
+        "-p",
+        "testtrain_pytest",
+        "-p",
+        "no:testtrain",
+        "-p",
+        "allure_pytest",
+        "--testtrain-run-id",
+        "dummy-run",
+        "--testtrain-auth-token",
+        "dummy-token",
+        "--alluredir",
+        "allure-results",
+    )
+    result.assert_outcomes(passed=1)
+
+    with open(test_env.path / "api_calls.json", "r") as f:
+        lines = f.readlines()
+        calls = [json.loads(line) for line in lines if line.strip()]
+
+    test_entry = next(
+        (
+            t
+            for c in calls
+            for t in c.get("tests", [])
+            if "test_step_params" in t["nodeId"]
+        ),
+        None,
+    )
+    step = test_entry["steps"][0]
+    assert step["name"] == "Execution Step"
+    assert any(
+        p["name"] == "arg1" and "secret_data" in p["value"] for p in step["parameters"]
     )
 
-    # Check test parameters
+
+def test_parameter_modes_and_hidden_filtering(test_env):
+    """
+    Verify different parameter modes.
+    Masked and Default should be sent, Hidden should be filtered out.
+    """
+    test_env.makepyfile("""
+        import allure
+        from allure_commons.types import ParameterMode
+        
+        def test_modes():
+            allure.dynamic.parameter("visible", "val1", mode=ParameterMode.DEFAULT)
+            allure.dynamic.parameter("secret", "val2", mode=ParameterMode.MASKED)
+            allure.dynamic.parameter("internal", "val3", mode=ParameterMode.HIDDEN)
+    """)
+    result = test_env.runpytest(
+        "-p",
+        "testtrain_pytest",
+        "-p",
+        "no:testtrain",
+        "-p",
+        "allure_pytest",
+        "--testtrain-run-id",
+        "dummy-run",
+        "--testtrain-auth-token",
+        "dummy-token",
+        "--alluredir",
+        "allure-results",
+    )
+    result.assert_outcomes(passed=1)
+
+    with open(test_env.path / "api_calls.json", "r") as f:
+        lines = f.readlines()
+        calls = [json.loads(line) for line in lines if line.strip()]
+
+    test_entry = next(
+        (t for c in calls for t in c.get("tests", []) if "test_modes" in t["nodeId"]),
+        None,
+    )
     params = test_entry.get("parameters", [])
-    assert len(params) >= 2
 
-    login_param = next((p for p in params if p["name"] == "login"), None)
-    assert login_param is not None
-    assert "johndoe" in login_param["value"]
+    # Check that visible and secret are present
+    assert any(p["name"] == "visible" and "val1" in p["value"] for p in params)
+    assert any(p["name"] == "secret" and "val2" in p["value"] for p in params)
 
-    dynamic_param = next((p for p in params if p["name"] == "dynamic_param"), None)
-    assert dynamic_param is not None
-    assert "dynamic_val" in dynamic_param["value"]
-    # ParameterMode.MASKED value depends on allure implementation, usually it's "masked"
-    assert "mode" in dynamic_param
+    # Check that internal (hidden) is NOT present
+    assert not any(p["name"] == "internal" for p in params), (
+        f"Hidden parameter 'internal' should not be in {params}"
+    )
 
-    # Check step parameters
-    steps = test_entry.get("steps", [])
-    if len(steps) > 0:
-        step = steps[0]
-        assert step["name"] == "Step with params"
-        step_params = step.get("parameters", [])
-        assert len(step_params) == 2
-        assert any(sp["name"] == "p1" and "val1" in sp["value"] for sp in step_params)
-        assert any(sp["name"] == "p2" and "val2" in sp["value"] for sp in step_params)
+    # Verify modes are sent correctly
+    secret_param = next(p for p in params if p["name"] == "secret")
+    assert (
+        "masked" in secret_param["mode"].lower()
+        or secret_param["mode"] == "ParameterMode.MASKED"
+    )
