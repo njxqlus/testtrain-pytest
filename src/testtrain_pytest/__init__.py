@@ -290,6 +290,17 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
+def _smart_strip_quotes(val: str) -> str:
+    """
+    Remove wrapping single quotes from a string if it has content inside.
+    Allure often wraps parameter values in extra single quotes (e.g. "'val'").
+    We strip them ONLY if the string is longer than 2 characters and starts/ends with '.
+    """
+    if len(val) > 2 and val.startswith("'") and val.endswith("'"):
+        return val[1:-1]
+    return val
+
+
 def _get_allure_result_data() -> dict:
     """Attempts to extract the current test's Allure data (name, steps, parameters)."""
     res = {"name": None, "steps": None, "parameters": None}
@@ -326,7 +337,7 @@ def _get_allure_result_data() -> dict:
                     res["parameters"] = [
                         {
                             "name": getattr(p, "name", "param"),
-                            "value": str(getattr(p, "value", "")),
+                            "value": _smart_strip_quotes(str(getattr(p, "value", ""))),
                             "mode": str(getattr(p, "mode", "default") or "default"),
                         }
                         for p in test_parameters
@@ -376,7 +387,7 @@ def _map_allure_step(step) -> dict:
         mapped["parameters"] = [
             {
                 "name": getattr(p, "name", "param"),
-                "value": str(getattr(p, "value", "")),
+                "value": _smart_strip_quotes(str(getattr(p, "value", ""))),
                 "mode": str(getattr(p, "mode", "default") or "default"),
             }
             for p in step_parameters
