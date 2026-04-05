@@ -317,20 +317,25 @@ def _get_allure_result_data() -> dict:
         if listener:
             test_result = listener.allure_logger.get_test(None)
             if test_result:
-                if test_result.name:
-                    res["name"] = str(test_result.name)
-                if test_result.parameters:
+                test_name = getattr(test_result, "name", None)
+                if test_name:
+                    res["name"] = str(test_name)
+
+                test_parameters = getattr(test_result, "parameters", [])
+                if test_parameters:
                     res["parameters"] = [
                         {
-                            "name": p.name,
-                            "value": str(p.value),
+                            "name": getattr(p, "name", "param"),
+                            "value": str(getattr(p, "value", "")),
                             "mode": str(getattr(p, "mode", "default") or "default"),
                         }
-                        for p in test_result.parameters
+                        for p in test_parameters
                         if str(getattr(p, "mode", "default") or "default") != "hidden"
                     ]
-                if test_result.steps:
-                    res["steps"] = [_map_allure_step(s) for s in test_result.steps]
+
+                test_steps = getattr(test_result, "steps", [])
+                if test_steps:
+                    res["steps"] = [_map_allure_step(s) for s in test_steps]
     except (ImportError, Exception):
         pass
     return res
@@ -341,36 +346,46 @@ def _map_allure_step(step) -> dict:
     from allure_commons.model2 import Status
 
     output = None
-    if step.statusDetails:
+    status_details = getattr(step, "statusDetails", None)
+    if status_details:
         output = ""
-        if step.statusDetails.message:
-            output += step.statusDetails.message
-        if step.statusDetails.trace:
+        msg = getattr(status_details, "message", None)
+        if msg:
+            output += str(msg)
+        trace = getattr(status_details, "trace", None)
+        if trace:
             if output:
                 output += "\n"
-            output += step.statusDetails.trace
+            output += str(trace)
+
+    step_name = getattr(step, "name", "step")
+    step_status = getattr(step, "status", Status.PASSED)
+    step_start = getattr(step, "start", 0)
+    step_stop = getattr(step, "stop", 0)
 
     mapped = {
-        "name": str(step.name) if step.name else "step",
-        "is_failed": step.status in (Status.FAILED, Status.BROKEN),
-        "duration": int(step.stop - step.start) if step.stop and step.start else 0,
+        "name": str(step_name),
+        "is_failed": step_status in (Status.FAILED, Status.BROKEN),
+        "duration": int(step_stop - step_start) if step_stop and step_start else 0,
     }
     if output:
         mapped["output"] = output
 
-    if step.parameters:
+    step_parameters = getattr(step, "parameters", [])
+    if step_parameters:
         mapped["parameters"] = [
             {
-                "name": p.name,
-                "value": str(p.value),
+                "name": getattr(p, "name", "param"),
+                "value": str(getattr(p, "value", "")),
                 "mode": str(getattr(p, "mode", "default") or "default"),
             }
-            for p in step.parameters
+            for p in step_parameters
             if str(getattr(p, "mode", "default") or "default") != "hidden"
         ]
 
-    if step.steps:
-        mapped["steps"] = [_map_allure_step(s) for s in step.steps]
+    step_substeps = getattr(step, "steps", [])
+    if step_substeps:
+        mapped["steps"] = [_map_allure_step(s) for s in step_substeps]
 
     return mapped
 
@@ -439,8 +454,9 @@ def _extract_metadata(item):
                         for label in getattr(res, "labels", [])
                     ]
                     stash["allure_labels"] = allure_labels
-                    if res.description:
-                        stash["allure_description"] = str(res.description)
+                    description = getattr(res, "description", None)
+                    if description:
+                        stash["allure_description"] = str(description)
         except Exception:
             pass
 
