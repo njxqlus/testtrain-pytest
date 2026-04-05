@@ -359,7 +359,11 @@ def _map_allure_step(step) -> dict:
 
     if step.parameters:
         mapped["parameters"] = [
-            {"name": p.name, "value": str(p.value), "mode": getattr(p, "mode", "default")}
+            {
+                "name": p.name,
+                "value": str(p.value),
+                "mode": getattr(p, "mode", "default"),
+            }
             for p in step.parameters
         ]
 

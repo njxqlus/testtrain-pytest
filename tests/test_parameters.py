@@ -1,5 +1,6 @@
 import json
 
+
 def test_parameters_extraction(test_env):
     """Verify extraction of parameters from tests and steps."""
     test_env.makepyfile("""
@@ -18,12 +19,18 @@ def test_parameters_extraction(test_env):
     """)
 
     result = test_env.runpytest(
-        "-p", "testtrain_pytest",
-        "-p", "no:testtrain",
-        "-p", "allure_pytest",
-        "--testtrain-run-id", "dummy-run",
-        "--testtrain-auth-token", "dummy-token",
-        "--alluredir", "allure-results",
+        "-p",
+        "testtrain_pytest",
+        "-p",
+        "no:testtrain",
+        "-p",
+        "allure_pytest",
+        "--testtrain-run-id",
+        "dummy-run",
+        "--testtrain-auth-token",
+        "dummy-token",
+        "--alluredir",
+        "allure-results",
     )
 
     result.assert_outcomes(passed=1)
@@ -35,7 +42,10 @@ def test_parameters_extraction(test_env):
         calls = [json.loads(line) for line in f]
 
     test_entry = next(
-        t for c in calls for t in c.get("tests", []) if "test_parametrized" in t["nodeId"]
+        t
+        for c in calls
+        for t in c.get("tests", [])
+        if "test_parametrized" in t["nodeId"]
     )
 
     # Check test parameters
