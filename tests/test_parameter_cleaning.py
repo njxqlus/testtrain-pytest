@@ -1,5 +1,6 @@
 import json
 
+
 def test_allure_parameter_cleaning(test_env):
     """Verify that allure parameters are cleaned of wrapping single quotes if they contain content."""
     test_env.makepyfile("""
