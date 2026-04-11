@@ -25,13 +25,14 @@ def test_env(pytester, request):
 
         def mock_post(url, json=None, **kwargs):
             import json as json_mod
-            payload = json
-            if payload is None:
-                meta = (kwargs.get("data") or {}).get("meta")
+            payload_data = json
+            if payload_data is None:
+                post_data = kwargs.get("data")
+                meta = post_data.get("meta") if isinstance(post_data, dict) else None
                 if meta:
-                    payload = json_mod.loads(meta)
+                    payload_data = json_mod.loads(meta)
                 else:
-                    payload = {}
+                    payload_data = {}
 
             file_fields = []
             files = kwargs.get("files")
@@ -40,10 +41,10 @@ def test_env(pytester, request):
             elif isinstance(files, list):
                 file_fields.extend(item[0] for item in files if isinstance(item, tuple) and item)
             if file_fields:
-                payload["__files__"] = file_fields
+                payload_data["__files__"] = file_fields
 
             with open("api_calls.json", "a") as f:
-                f.write(json_mod.dumps(payload) + "\\n")
+                f.write(json_mod.dumps(payload_data) + "\\n")
             m = MagicMock()
             m.ok = True
             m.status_code = 200

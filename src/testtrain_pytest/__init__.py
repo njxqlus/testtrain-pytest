@@ -254,12 +254,9 @@ def pytest_runtest_logreport(report):
     if data.get("attachments"):
         test_entry["attachments"] = data.get("attachments")
 
-    has_any_attachments = _entry_has_attachments(test_entry)
-    multipart_payload = None
-    if has_any_attachments:
-        alluredir = getattr(config.option, "allure_report_dir", None)
-        multipart_payload = _build_multipart_payload(test_entry, alluredir)
-    payload_entry = multipart_payload["entry"] if multipart_payload else test_entry
+    alluredir = getattr(config.option, "allure_report_dir", None)
+    multipart_payload = _build_multipart_payload(test_entry, alluredir)
+    payload_entry = multipart_payload.get("entry", test_entry)
 
     max_retries = 3
     for attempt in range(max_retries + 1):
@@ -452,24 +449,6 @@ def _map_allure_attachment(attachment) -> dict:
     return mapped
 
 
-def _entry_has_attachments(entry: dict) -> bool:
-    if entry.get("attachments"):
-        return True
-    for step in entry.get("steps", []):
-        if _step_has_attachments(step):
-            return True
-    return False
-
-
-def _step_has_attachments(step: dict) -> bool:
-    if step.get("attachments"):
-        return True
-    for child in step.get("steps", []):
-        if _step_has_attachments(child):
-            return True
-    return False
-
-
 def _build_multipart_payload(entry: dict, alluredir):
     files = []
     used_fields = set()
@@ -518,7 +497,8 @@ def _transform_step_attachments(step, alluredir, files, used_fields, prefix):
 def _collect_attachments(attachments, alluredir, files, used_fields, prefix):
     mapped = []
     for idx, attachment in enumerate(attachments, start=1):
-        source = str((attachment or {}).get("source", "")).strip()
+        attachment_data = attachment or {}
+        source = str(attachment_data.get("source", "")).strip()
         if not source:
             continue
         path = _resolve_attachment_path(source, alluredir)
@@ -526,13 +506,11 @@ def _collect_attachments(attachments, alluredir, files, used_fields, prefix):
             continue
 
         field = _make_unique_field_name(
-            (attachment or {}).get("name") or path.stem or f"{prefix}_{idx}",
+            attachment_data.get("name") or path.stem or f"{prefix}_{idx}",
             used_fields,
         )
         filename = path.name
-        content_type = (attachment or {}).get("type") or mimetypes.guess_type(filename)[
-            0
-        ]
+        content_type = attachment_data.get("type") or mimetypes.guess_type(filename)[0]
         files.append(
             (
                 field,
