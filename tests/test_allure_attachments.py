@@ -119,3 +119,52 @@ def test_nested_step_attachments_are_sent(test_env):
     referenced_fields = _collect_step_attachment_fields(steps)
     assert len(referenced_fields) == 2
     assert referenced_fields == set(call_payload.get("__files__", []))
+
+
+def test_non_file_attachments_are_skipped(test_env):
+    test_env.makepyfile("""
+        import testtrain_pytest
+
+        def test_non_file_attachment(monkeypatch, tmp_path):
+            bad_attachment_path = tmp_path / "not-a-file"
+            bad_attachment_path.mkdir()
+            monkeypatch.setattr(
+                testtrain_pytest,
+                "_get_allure_result_data",
+                lambda: {
+                    "name": None,
+                    "steps": None,
+                    "parameters": None,
+                    "attachments": [{"source": str(bad_attachment_path), "name": "bad"}],
+                },
+            )
+            assert True
+    """)
+
+    result = test_env.runpytest(
+        "-p",
+        "testtrain_pytest",
+        "-p",
+        "no:testtrain",
+        "--testtrain-run-id",
+        "dummy-run",
+        "--testtrain-auth-token",
+        "dummy-token",
+    )
+
+    result.assert_outcomes(passed=1)
+
+    calls_file = test_env.path / "api_calls.json"
+    calls = [json.loads(line) for line in calls_file.read_text().splitlines()]
+    call_payload = next(
+        c
+        for c in calls
+        if any("test_non_file_attachment" in t["nodeId"] for t in c.get("tests", []))
+    )
+    test_entry = next(
+        t
+        for t in call_payload.get("tests", [])
+        if "test_non_file_attachment" in t["nodeId"]
+    )
+    assert "__files__" not in call_payload
+    assert "attachments" not in test_entry

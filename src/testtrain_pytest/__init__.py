@@ -255,58 +255,67 @@ def pytest_runtest_logreport(report):
         test_entry["attachments"] = data.get("attachments")
 
     alluredir = getattr(config.option, "allure_report_dir", None)
+    opened_multipart_files = []
 
     max_retries = 3
-    for attempt in range(max_retries + 1):
-        try:
+    try:
+        for attempt in range(max_retries + 1):
             try:
-                multipart_payload = _build_multipart_payload(test_entry, alluredir)
-                payload_entry = multipart_payload.get("entry", test_entry)
-            except (OSError, ValueError):
-                multipart_payload = None
-                payload_entry = test_entry
-            headers = {
-                "Authorization": f"Bearer {config._testtrain_auth_token}",
-            }
-            if multipart_payload and multipart_payload["files"]:
-                resp = requests.post(
-                    f"{config._testtrain_url}/api/tests",
-                    data={"meta": json.dumps({"tests": [payload_entry]})},
-                    files=multipart_payload["files"],
-                    headers=headers,
-                    timeout=10,
-                )
-            else:
-                resp = requests.post(
-                    f"{config._testtrain_url}/api/tests",
-                    json={"tests": [payload_entry]},
-                    headers={**headers, "Content-Type": "application/json"},
-                    timeout=10,
-                )
-            if not resp.ok:
-                error_msg = (
-                    resp.json().get("message", resp.text) if resp.content else resp.text
-                )
-                if 400 <= resp.status_code < 500:
-                    pytest.exit(
-                        f"\n❌ Testtrain: Failed to send test result (Status {resp.status_code}).\n   Error: {error_msg}\n   Aborting to ensure no results are lost."
+                try:
+                    multipart_payload = _build_multipart_payload(test_entry, alluredir)
+                    payload_entry = multipart_payload.get("entry", test_entry)
+                    opened_multipart_files = multipart_payload.get("files", [])
+                except (OSError, ValueError):
+                    multipart_payload = None
+                    payload_entry = test_entry
+                    opened_multipart_files = []
+                headers = {
+                    "Authorization": f"Bearer {config._testtrain_auth_token}",
+                }
+                if multipart_payload and opened_multipart_files:
+                    _rewind_multipart_files(opened_multipart_files)
+                    resp = requests.post(
+                        f"{config._testtrain_url}/api/tests",
+                        data={"meta": json.dumps({"tests": [payload_entry]})},
+                        files=opened_multipart_files,
+                        headers=headers,
+                        timeout=10,
                     )
                 else:
-                    if attempt < max_retries:
-                        time.sleep(10)
-                        continue
-                    pytest.exit(
-                        f"\n❌ Testtrain: Failed to send test result after {max_retries + 1} attempts (Status {resp.status_code}).\n   Error: {error_msg}\n   Aborting to ensure no results are lost."
+                    resp = requests.post(
+                        f"{config._testtrain_url}/api/tests",
+                        json={"tests": [payload_entry]},
+                        headers={**headers, "Content-Type": "application/json"},
+                        timeout=10,
                     )
-            else:
-                break
-        except requests.exceptions.RequestException as e:
-            if attempt < max_retries:
-                time.sleep(10)
-                continue
-            pytest.exit(
-                f"\n❌ Testtrain: Connection error during reporting after {max_retries + 1} attempts: {e}\n   Aborting to ensure no results are lost."
-            )
+                if not resp.ok:
+                    error_msg = (
+                        resp.json().get("message", resp.text)
+                        if resp.content
+                        else resp.text
+                    )
+                    if 400 <= resp.status_code < 500:
+                        pytest.exit(
+                            f"\n❌ Testtrain: Failed to send test result (Status {resp.status_code}).\n   Error: {error_msg}\n   Aborting to ensure no results are lost."
+                        )
+                    else:
+                        if attempt < max_retries:
+                            time.sleep(10)
+                            continue
+                        pytest.exit(
+                            f"\n❌ Testtrain: Failed to send test result after {max_retries + 1} attempts (Status {resp.status_code}).\n   Error: {error_msg}\n   Aborting to ensure no results are lost."
+                        )
+                else:
+                    break
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries:
+                    time.sleep(10)
+                    continue
+                pytest.exit(
+                    f"\n❌ Testtrain: Connection error during reporting after {max_retries + 1} attempts: {e}\n   Aborting to ensure no results are lost."
+                )
+    finally:
+        _close_multipart_files(opened_multipart_files)
 
 
 def _utc_now_iso() -> str:
@@ -508,6 +517,8 @@ def _collect_attachments(attachments, alluredir, files, used_fields, prefix):
         path = _resolve_attachment_path(source, alluredir)
         if not path:
             continue
+        if not path.is_file():
+            continue
 
         field = _make_unique_field_name(
             attachment_data.get("name") or path.stem or f"{prefix}_{idx}",
@@ -515,15 +526,12 @@ def _collect_attachments(attachments, alluredir, files, used_fields, prefix):
         )
         filename = path.name
         content_type = attachment_data.get("type") or mimetypes.guess_type(filename)[0]
+        try:
+            file_handle = path.open("rb")
+        except OSError:
+            continue
         files.append(
-            (
-                field,
-                (
-                    filename,
-                    path.read_bytes(),
-                    content_type or "application/octet-stream",
-                ),
-            )
+            (field, (filename, file_handle, content_type or "application/octet-stream"))
         )
         mapped.append({"field": field})
     return mapped
@@ -555,6 +563,30 @@ def _make_unique_field_name(raw_name, used_fields):
         counter += 1
     used_fields.add(field)
     return field
+
+
+def _rewind_multipart_files(files):
+    for _, file_data in files:
+        if not isinstance(file_data, tuple) or len(file_data) < 2:
+            continue
+        fileobj = file_data[1]
+        if hasattr(fileobj, "seek"):
+            try:
+                fileobj.seek(0)
+            except (OSError, ValueError):
+                pass
+
+
+def _close_multipart_files(files):
+    for _, file_data in files:
+        if not isinstance(file_data, tuple) or len(file_data) < 2:
+            continue
+        fileobj = file_data[1]
+        if hasattr(fileobj, "close"):
+            try:
+                fileobj.close()
+            except OSError:
+                pass
 
 
 def _extract_metadata(item):
