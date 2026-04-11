@@ -1,6 +1,9 @@
+import json
+import mimetypes
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 import requests
@@ -171,6 +174,7 @@ def pytest_runtest_makereport(item, call):
                 "allure_title": allure_data.get("name"),
                 "allure_steps": allure_data.get("steps"),
                 "parameters": allure_data.get("parameters"),
+                "attachments": allure_data.get("attachments"),
                 "name": item.nodeid,
                 "outcome": stash["outcome"],
                 "longrepr": stash["longrepr"],
@@ -247,18 +251,37 @@ def pytest_runtest_logreport(report):
     if data.get("parameters"):
         test_entry["parameters"] = data.get("parameters")
 
+    if data.get("attachments"):
+        test_entry["attachments"] = data.get("attachments")
+
+    has_any_attachments = _entry_has_attachments(test_entry)
+    multipart_payload = None
+    if has_any_attachments:
+        alluredir = getattr(config.option, "allure_report_dir", None)
+        multipart_payload = _build_multipart_payload(test_entry, alluredir)
+    payload_entry = multipart_payload["entry"] if multipart_payload else test_entry
+
     max_retries = 3
     for attempt in range(max_retries + 1):
         try:
-            resp = requests.post(
-                f"{config._testtrain_url}/api/tests",
-                json={"tests": [test_entry]},
-                headers={
-                    "Authorization": f"Bearer {config._testtrain_auth_token}",
-                    "Content-Type": "application/json",
-                },
-                timeout=10,
-            )
+            headers = {
+                "Authorization": f"Bearer {config._testtrain_auth_token}",
+            }
+            if multipart_payload and multipart_payload["files"]:
+                resp = requests.post(
+                    f"{config._testtrain_url}/api/tests",
+                    data={"meta": json.dumps({"tests": [payload_entry]})},
+                    files=multipart_payload["files"],
+                    headers=headers,
+                    timeout=10,
+                )
+            else:
+                resp = requests.post(
+                    f"{config._testtrain_url}/api/tests",
+                    json={"tests": [payload_entry]},
+                    headers={**headers, "Content-Type": "application/json"},
+                    timeout=10,
+                )
             if not resp.ok:
                 error_msg = (
                     resp.json().get("message", resp.text) if resp.content else resp.text
@@ -303,7 +326,7 @@ def _smart_strip_quotes(val: str) -> str:
 
 def _get_allure_result_data() -> dict:
     """Attempts to extract the current test's Allure data (name, steps, parameters)."""
-    res = {"name": None, "steps": None, "parameters": None}
+    res = {"name": None, "steps": None, "parameters": None, "attachments": None}
     try:
         import allure_commons
 
@@ -347,6 +370,13 @@ def _get_allure_result_data() -> dict:
                 test_steps = getattr(test_result, "steps", [])
                 if test_steps:
                     res["steps"] = [_map_allure_step(s) for s in test_steps]
+
+                test_attachments = getattr(test_result, "attachments", [])
+                if test_attachments:
+                    attachments = [_map_allure_attachment(a) for a in test_attachments]
+                    res["attachments"] = [
+                        attachment for attachment in attachments if attachment
+                    ]
     except (ImportError, Exception):
         pass
     return res
@@ -398,7 +428,151 @@ def _map_allure_step(step) -> dict:
     if step_substeps:
         mapped["steps"] = [_map_allure_step(s) for s in step_substeps]
 
+    step_attachments = getattr(step, "attachments", [])
+    if step_attachments:
+        attachments = [_map_allure_attachment(a) for a in step_attachments]
+        attachments = [attachment for attachment in attachments if attachment]
+        if attachments:
+            mapped["attachments"] = attachments
+
     return mapped
+
+
+def _map_allure_attachment(attachment) -> dict:
+    source = getattr(attachment, "source", None)
+    if not source:
+        return {}
+    mapped = {"source": str(source)}
+    attachment_name = getattr(attachment, "name", None)
+    if attachment_name:
+        mapped["name"] = str(attachment_name)
+    attachment_type = getattr(attachment, "type", None)
+    if attachment_type:
+        mapped["type"] = str(attachment_type)
+    return mapped
+
+
+def _entry_has_attachments(entry: dict) -> bool:
+    if entry.get("attachments"):
+        return True
+    for step in entry.get("steps", []):
+        if _step_has_attachments(step):
+            return True
+    return False
+
+
+def _step_has_attachments(step: dict) -> bool:
+    if step.get("attachments"):
+        return True
+    for child in step.get("steps", []):
+        if _step_has_attachments(child):
+            return True
+    return False
+
+
+def _build_multipart_payload(entry: dict, alluredir):
+    files = []
+    used_fields = set()
+    transformed_entry = dict(entry)
+
+    test_attachments = entry.get("attachments", [])
+    if test_attachments:
+        mapped_attachments = _collect_attachments(
+            test_attachments, alluredir, files, used_fields, "test_attachment"
+        )
+        if mapped_attachments:
+            transformed_entry["attachments"] = mapped_attachments
+        else:
+            transformed_entry.pop("attachments", None)
+
+    steps = entry.get("steps", [])
+    if steps:
+        transformed_entry["steps"] = [
+            _transform_step_attachments(s, alluredir, files, used_fields, f"step_{idx}")
+            for idx, s in enumerate(steps, start=1)
+        ]
+
+    return {"entry": transformed_entry, "files": files}
+
+
+def _transform_step_attachments(step, alluredir, files, used_fields, prefix):
+    transformed = {k: v for k, v in step.items() if k not in {"attachments", "steps"}}
+    step_attachments = step.get("attachments", [])
+    if step_attachments:
+        mapped_attachments = _collect_attachments(
+            step_attachments, alluredir, files, used_fields, f"{prefix}_attachment"
+        )
+        if mapped_attachments:
+            transformed["attachments"] = mapped_attachments
+    child_steps = step.get("steps", [])
+    if child_steps:
+        transformed["steps"] = [
+            _transform_step_attachments(
+                child_step, alluredir, files, used_fields, f"{prefix}_{idx}"
+            )
+            for idx, child_step in enumerate(child_steps, start=1)
+        ]
+    return transformed
+
+
+def _collect_attachments(attachments, alluredir, files, used_fields, prefix):
+    mapped = []
+    for idx, attachment in enumerate(attachments, start=1):
+        source = str((attachment or {}).get("source", "")).strip()
+        if not source:
+            continue
+        path = _resolve_attachment_path(source, alluredir)
+        if not path:
+            continue
+
+        field = _make_unique_field_name(
+            (attachment or {}).get("name") or path.stem or f"{prefix}_{idx}",
+            used_fields,
+        )
+        filename = path.name
+        content_type = (attachment or {}).get("type") or mimetypes.guess_type(filename)[
+            0
+        ]
+        files.append(
+            (
+                field,
+                (
+                    filename,
+                    path.read_bytes(),
+                    content_type or "application/octet-stream",
+                ),
+            )
+        )
+        mapped.append({"field": field})
+    return mapped
+
+
+def _resolve_attachment_path(source, alluredir):
+    source_path = Path(source)
+    if source_path.is_absolute() and source_path.exists():
+        return source_path
+    if alluredir:
+        allure_path = Path(alluredir) / source
+        if allure_path.exists():
+            return allure_path
+    cwd_path = Path.cwd() / source
+    if cwd_path.exists():
+        return cwd_path
+    return None
+
+
+def _make_unique_field_name(raw_name, used_fields):
+    safe_name = "".join(
+        ch if (ch.isalnum() or ch in {"_", "-"}) else "_" for ch in str(raw_name)
+    ).strip("_")
+    base = safe_name or "attachment"
+    field = base
+    counter = 2
+    while field in used_fields:
+        field = f"{base}_{counter}"
+        counter += 1
+    used_fields.add(field)
+    return field
 
 
 def _extract_metadata(item):
