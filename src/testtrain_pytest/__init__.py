@@ -255,12 +255,16 @@ def pytest_runtest_logreport(report):
         test_entry["attachments"] = data.get("attachments")
 
     alluredir = getattr(config.option, "allure_report_dir", None)
-    multipart_payload = _build_multipart_payload(test_entry, alluredir)
-    payload_entry = multipart_payload.get("entry", test_entry)
 
     max_retries = 3
     for attempt in range(max_retries + 1):
         try:
+            try:
+                multipart_payload = _build_multipart_payload(test_entry, alluredir)
+                payload_entry = multipart_payload.get("entry", test_entry)
+            except (OSError, ValueError):
+                multipart_payload = None
+                payload_entry = test_entry
             headers = {
                 "Authorization": f"Bearer {config._testtrain_auth_token}",
             }
