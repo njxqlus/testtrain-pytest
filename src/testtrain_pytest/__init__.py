@@ -440,7 +440,7 @@ def _wrap_allure_steps_with_lifecycle(setup_steps, body_steps, teardown_steps):
         return {
             "name": name,
             "is_failed": any(step.get("is_failed") for step in step_list),
-            "duration": sum(int(step.get("duration", 0) or 0) for step in step_list),
+            "duration": sum(int(step.get("duration") or 0) for step in step_list),
             "steps": step_list,
         }
 

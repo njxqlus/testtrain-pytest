@@ -347,7 +347,8 @@ def test_collect_allure_fixture_steps_from_listener_containers():
     )
 
     class FakeLogger:
-        _items = ["container-1"]
+        def __init__(self):
+            self._items = ("container-1",)
 
         @staticmethod
         def get_item(item_uuid):
