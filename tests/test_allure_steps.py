@@ -1,4 +1,17 @@
 import json
+from types import SimpleNamespace
+
+from allure_commons.model2 import Status
+
+import testtrain_pytest
+
+
+def _collect_step_names(steps):
+    names = []
+    for step in steps:
+        names.append(step.get("name"))
+        names.extend(_collect_step_names(step.get("steps", [])))
+    return names
 
 
 def test_decorator(test_env):
@@ -241,3 +254,114 @@ def test_nested_steps_depth_3(test_env):
         l3 = l2["steps"][0]
         assert l3["name"] == "Level 3"
         assert "steps" not in l3 or len(l3["steps"]) == 0
+
+
+def test_wrap_allure_steps_with_lifecycle_groups():
+    grouped_steps = testtrain_pytest._wrap_allure_steps_with_lifecycle(
+        [
+            {
+                "name": "sample_fixture",
+                "is_failed": False,
+                "duration": 2,
+                "steps": [
+                    {"name": "Fixture setup step", "is_failed": False, "duration": 1}
+                ],
+            }
+        ],
+        [{"name": "Body step", "is_failed": False, "duration": 3}],
+        [
+            {
+                "name": "sample_fixture::teardown",
+                "is_failed": False,
+                "duration": 4,
+                "steps": [
+                    {"name": "Fixture teardown step", "is_failed": False, "duration": 1}
+                ],
+            }
+        ],
+    )
+
+    assert [step["name"] for step in grouped_steps] == [
+        "Set up",
+        "Test body",
+        "Tear down",
+    ]
+    assert grouped_steps[0]["duration"] == 2
+    assert grouped_steps[1]["duration"] == 3
+    assert grouped_steps[2]["duration"] == 4
+
+    setup_names = _collect_step_names(grouped_steps[0].get("steps", []))
+    body_names = _collect_step_names(grouped_steps[1].get("steps", []))
+    teardown_names = _collect_step_names(grouped_steps[2].get("steps", []))
+
+    assert "Fixture setup step" in setup_names
+    assert "Body step" in body_names
+    assert "Fixture teardown step" in teardown_names
+
+
+def test_collect_allure_fixture_steps_from_listener_containers():
+    before_fixture = SimpleNamespace(
+        name="sample_fixture",
+        status=Status.PASSED,
+        start=1,
+        stop=3,
+        statusDetails=None,
+        steps=[
+            SimpleNamespace(
+                name="Fixture setup step",
+                status=Status.PASSED,
+                start=1,
+                stop=2,
+                statusDetails=None,
+                steps=[],
+                parameters=[],
+                attachments=[],
+            )
+        ],
+        parameters=[],
+        attachments=[],
+    )
+    after_fixture = SimpleNamespace(
+        name="sample_fixture::teardown",
+        status=Status.PASSED,
+        start=4,
+        stop=6,
+        statusDetails=None,
+        steps=[
+            SimpleNamespace(
+                name="Fixture teardown step",
+                status=Status.PASSED,
+                start=5,
+                stop=6,
+                statusDetails=None,
+                steps=[],
+                parameters=[],
+                attachments=[],
+            )
+        ],
+        parameters=[],
+        attachments=[],
+    )
+    container = SimpleNamespace(
+        children=["test-uuid"], befores=[before_fixture], afters=[after_fixture]
+    )
+
+    class FakeLogger:
+        _items = ["container-1"]
+
+        @staticmethod
+        def get_item(item_uuid):
+            return container if item_uuid == "container-1" else None
+
+    listener = SimpleNamespace(allure_logger=FakeLogger())
+    test_result = SimpleNamespace(uuid="test-uuid")
+
+    fixture_steps = testtrain_pytest._collect_allure_fixture_steps(
+        listener, test_result
+    )
+
+    assert fixture_steps is not None
+    assert fixture_steps["setup"][0]["name"] == "sample_fixture"
+    assert fixture_steps["setup"][0]["steps"][0]["name"] == "Fixture setup step"
+    assert fixture_steps["teardown"][0]["name"] == "sample_fixture::teardown"
+    assert fixture_steps["teardown"][0]["steps"][0]["name"] == "Fixture teardown step"

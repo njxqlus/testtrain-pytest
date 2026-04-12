@@ -378,8 +378,17 @@ def _get_allure_result_data() -> dict:
                     ]
 
                 test_steps = getattr(test_result, "steps", [])
-                if test_steps:
-                    res["steps"] = [_map_allure_step(s) for s in test_steps]
+                mapped_test_steps = [_map_allure_step(s) for s in test_steps]
+
+                fixture_steps = _collect_allure_fixture_steps(listener, test_result)
+                if fixture_steps:
+                    res["steps"] = _wrap_allure_steps_with_lifecycle(
+                        fixture_steps.get("setup", []),
+                        mapped_test_steps,
+                        fixture_steps.get("teardown", []),
+                    )
+                elif mapped_test_steps:
+                    res["steps"] = mapped_test_steps
 
                 test_attachments = getattr(test_result, "attachments", [])
                 if test_attachments:
@@ -390,6 +399,56 @@ def _get_allure_result_data() -> dict:
     except (ImportError, Exception):
         pass
     return res
+
+
+def _collect_allure_fixture_steps(listener, test_result):
+    logger = getattr(listener, "allure_logger", None)
+    test_uuid = getattr(test_result, "uuid", None)
+    if not logger or not test_uuid:
+        return None
+
+    items = getattr(logger, "_items", None)
+    if not items:
+        return None
+
+    setup_steps = []
+    teardown_steps = []
+    for item_uuid in items:
+        container = logger.get_item(item_uuid)
+        if not container:
+            continue
+        children = getattr(container, "children", [])
+        if test_uuid not in children:
+            continue
+
+        befores = getattr(container, "befores", [])
+        if befores:
+            setup_steps.extend(_map_allure_step(step) for step in befores)
+
+        afters = getattr(container, "afters", [])
+        if afters:
+            teardown_steps.extend(_map_allure_step(step) for step in afters)
+
+    if not setup_steps and not teardown_steps:
+        return None
+    return {"setup": setup_steps, "teardown": teardown_steps}
+
+
+def _wrap_allure_steps_with_lifecycle(setup_steps, body_steps, teardown_steps):
+    def _build_group(name, grouped_steps):
+        step_list = grouped_steps or []
+        return {
+            "name": name,
+            "is_failed": any(step.get("is_failed") for step in step_list),
+            "duration": sum(int(step.get("duration", 0) or 0) for step in step_list),
+            "steps": step_list,
+        }
+
+    return [
+        _build_group("Set up", setup_steps),
+        _build_group("Test body", body_steps),
+        _build_group("Tear down", teardown_steps),
+    ]
 
 
 def _map_allure_step(step) -> dict:
