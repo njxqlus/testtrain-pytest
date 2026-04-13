@@ -434,13 +434,30 @@ def _collect_allure_fixture_steps(listener, test_result):
     return {"setup": setup_steps, "teardown": teardown_steps}
 
 
+def _allure_step_tree_is_failed(steps) -> bool:
+    for step in steps or []:
+        if step.get("is_failed"):
+            return True
+        if _allure_step_tree_is_failed(step.get("steps") or []):
+            return True
+    return False
+
+
+def _allure_step_tree_duration(steps) -> int:
+    total = 0
+    for step in steps or []:
+        total += int(step.get("duration") or 0)
+        total += _allure_step_tree_duration(step.get("steps") or [])
+    return total
+
+
 def _wrap_allure_steps_with_lifecycle(setup_steps, body_steps, teardown_steps):
     def _build_group(name, grouped_steps):
         step_list = grouped_steps or []
         return {
             "name": name,
-            "is_failed": any(step.get("is_failed") for step in step_list),
-            "duration": sum(int(step.get("duration") or 0) for step in step_list),
+            "is_failed": _allure_step_tree_is_failed(step_list),
+            "duration": _allure_step_tree_duration(step_list),
             "steps": step_list,
         }
 
