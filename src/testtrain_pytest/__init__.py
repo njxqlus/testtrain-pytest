@@ -336,6 +336,7 @@ def _smart_strip_quotes(val: str) -> str:
 
 
 def _debug_log(message: str):
+    """Print debug logs only when TESTTRAIN_DEBUG is set to "1"."""
     if os.getenv("TESTTRAIN_DEBUG") == "1":
         print(f"🐞 Testtrain debug: {message}")
 
@@ -609,19 +610,18 @@ def _map_allure_attachment(attachment) -> dict:
 
 def _allure_status_is_failed(status) -> bool:
     status_text = str(status or "").lower()
-    return (
-        status_text in {"failed", "broken", "status.failed", "status.broken"}
-        or status_text.endswith(".failed")
-        or status_text.endswith(".broken")
-    )
+    return status_text in {"failed", "broken", "status.failed", "status.broken"}
 
 
 def _allure_data_to_obj(value):
+    """Recursively convert Allure JSON dictionaries/lists into attribute objects."""
     if isinstance(value, list):
         return [_allure_data_to_obj(item) for item in value]
     if isinstance(value, dict):
         return type(
-            "AllureData", (), {k: _allure_data_to_obj(v) for k, v in value.items()}
+            "AllureDataObject",
+            (),
+            {k: _allure_data_to_obj(v) for k, v in value.items()},
         )()
     return value
 

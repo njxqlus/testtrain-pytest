@@ -15,6 +15,7 @@ def _collect_step_names(steps):
 
 
 def _find_step_by_name(steps, name):
+    """Return the first nested step with the given name, or None if absent."""
     for step in steps:
         if step.get("name") == name:
             return step
@@ -446,7 +447,7 @@ def test_collect_allure_fixture_steps_from_container_files_fallback(tmp_path):
     assert teardown_step["attachments"][0]["source"] == "teardown.png"
 
 
-def test_fixture_lifecycle_steps_are_grouped_and_teardown_attachment_uploaded(test_env):
+def test_fixture_lifecycle_with_teardown_attachment(test_env):
     test_env.makepyfile("""
         import allure
         import pytest
