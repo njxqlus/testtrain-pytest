@@ -14,6 +14,17 @@ def _collect_step_names(steps):
     return names
 
 
+def _find_step_by_name(steps, name):
+    """Return the first nested step with the given name, or None if absent."""
+    for step in steps:
+        if step.get("name") == name:
+            return step
+        child_match = _find_step_by_name(step.get("steps", []), name)
+        if child_match:
+            return child_match
+    return None
+
+
 def test_decorator(test_env):
     """Verify Allure steps created via @allure.step decorator."""
     test_env.makepyfile("""
@@ -366,3 +377,141 @@ def test_collect_allure_fixture_steps_from_listener_containers():
     assert fixture_steps["setup"][0]["steps"][0]["name"] == "Fixture setup step"
     assert fixture_steps["teardown"][0]["name"] == "sample_fixture::teardown"
     assert fixture_steps["teardown"][0]["steps"][0]["name"] == "Fixture teardown step"
+
+
+def test_collect_allure_fixture_steps_from_container_files_fallback(tmp_path):
+    container_path = tmp_path / "sample-container.json"
+    container_path.write_text(
+        json.dumps(
+            {
+                "children": ["test-uuid"],
+                "befores": [
+                    {
+                        "name": "sample_fixture",
+                        "status": "passed",
+                        "start": 1,
+                        "stop": 3,
+                        "steps": [
+                            {
+                                "name": "Fixture setup step",
+                                "status": "passed",
+                                "start": 1,
+                                "stop": 2,
+                                "steps": [],
+                            }
+                        ],
+                    }
+                ],
+                "afters": [
+                    {
+                        "name": "sample_fixture::teardown",
+                        "status": "passed",
+                        "start": 4,
+                        "stop": 7,
+                        "steps": [
+                            {
+                                "name": "Fixture teardown step",
+                                "status": "passed",
+                                "start": 5,
+                                "stop": 7,
+                                "steps": [],
+                                "attachments": [
+                                    {
+                                        "name": "teardown_image",
+                                        "source": "teardown.png",
+                                        "type": "image/png",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    listener = SimpleNamespace(allure_logger=SimpleNamespace())
+    test_result = SimpleNamespace(uuid="test-uuid")
+
+    fixture_steps = testtrain_pytest._collect_allure_fixture_steps(
+        listener, test_result, tmp_path
+    )
+
+    assert fixture_steps is not None
+    assert fixture_steps["setup"][0]["name"] == "sample_fixture"
+    assert fixture_steps["setup"][0]["steps"][0]["name"] == "Fixture setup step"
+    assert fixture_steps["teardown"][0]["name"] == "sample_fixture::teardown"
+    teardown_step = fixture_steps["teardown"][0]["steps"][0]
+    assert teardown_step["name"] == "Fixture teardown step"
+    assert teardown_step["attachments"][0]["source"] == "teardown.png"
+
+
+def test_fixture_lifecycle_with_teardown_attachment(test_env):
+    test_env.makepyfile("""
+        import allure
+        import pytest
+
+        @pytest.fixture
+        def sample_fixture():
+            with allure.step("Fixture setup step"):
+                pass
+            yield
+            with allure.step("Fixture teardown step"):
+                allure.attach(
+                    "teardown bytes",
+                    name="teardown-shot",
+                    attachment_type=allure.attachment_type.PNG,
+                )
+
+        def test_with_fixture(sample_fixture):
+            with allure.step("Body step"):
+                pass
+    """)
+
+    result = test_env.runpytest(
+        "-p",
+        "testtrain_pytest",
+        "-p",
+        "no:testtrain",
+        "-p",
+        "allure_pytest",
+        "--alluredir",
+        "allure-results",
+        "--testtrain-run-id",
+        "dummy-run",
+        "--testtrain-auth-token",
+        "dummy-token",
+    )
+
+    result.assert_outcomes(passed=1)
+
+    calls_file = test_env.path / "api_calls.json"
+    calls = [json.loads(line) for line in calls_file.read_text().splitlines()]
+    call_payload = next(
+        c
+        for c in calls
+        if any("test_with_fixture" in t["nodeId"] for t in c.get("tests", []))
+    )
+    test_entry = next(
+        t for t in call_payload.get("tests", []) if "test_with_fixture" in t["nodeId"]
+    )
+
+    steps = test_entry.get("steps", [])
+    assert [step["name"] for step in steps] == ["Set up", "Test body", "Tear down"]
+
+    setup_names = _collect_step_names(steps[0].get("steps", []))
+    body_names = _collect_step_names(steps[1].get("steps", []))
+    teardown_names = _collect_step_names(steps[2].get("steps", []))
+
+    assert "Fixture setup step" in setup_names
+    assert "Body step" in body_names
+    assert "Fixture teardown step" in teardown_names
+
+    teardown_step = _find_step_by_name(
+        steps[2].get("steps", []), "Fixture teardown step"
+    )
+    assert teardown_step is not None
+    assert "attachments" in teardown_step
+    teardown_attachment_field = teardown_step["attachments"][0]["field"]
+    assert teardown_attachment_field in set(call_payload.get("__files__", []))

@@ -163,7 +163,8 @@ def pytest_runtest_makereport(item, call):
             current_meta = getattr(item.config, "_test_meta_stash", {}).get(
                 item.nodeid, {}
             )
-            allure_data = _get_allure_result_data()
+            alluredir = getattr(item.config.option, "allure_report_dir", None)
+            allure_data = _get_allure_result_data(alluredir)
 
             data = {
                 "start_time": getattr(item.config, "_test_start_times", {}).get(
@@ -334,7 +335,13 @@ def _smart_strip_quotes(val: str) -> str:
     return val
 
 
-def _get_allure_result_data() -> dict:
+def _debug_log(message: str):
+    """Print debug logs only when TESTTRAIN_DEBUG is set to "1"."""
+    if os.getenv("TESTTRAIN_DEBUG") == "1":
+        print(f"🐞 Testtrain debug: {message}")
+
+
+def _get_allure_result_data(alluredir=None) -> dict:
     """Attempts to extract the current test's Allure data (name, steps, parameters)."""
     res = {"name": None, "steps": None, "parameters": None, "attachments": None}
     try:
@@ -382,31 +389,45 @@ def _get_allure_result_data() -> dict:
                 if mapped_test_steps:
                     res["steps"] = mapped_test_steps
 
-                try:
-                    fixture_steps = _collect_allure_fixture_steps(listener, test_result)
-                    if fixture_steps:
-                        res["steps"] = _wrap_allure_steps_with_lifecycle(
-                            fixture_steps.get("setup", []),
-                            mapped_test_steps,
-                            fixture_steps.get("teardown", []),
-                        )
-                except Exception:
-                    pass
+                fixture_steps = _collect_allure_fixture_steps(
+                    listener, test_result, alluredir
+                )
+                if fixture_steps:
+                    res["steps"] = _wrap_allure_steps_with_lifecycle(
+                        fixture_steps.get("setup", []),
+                        mapped_test_steps,
+                        fixture_steps.get("teardown", []),
+                    )
                 test_attachments = getattr(test_result, "attachments", [])
                 if test_attachments:
                     attachments = [_map_allure_attachment(a) for a in test_attachments]
                     res["attachments"] = [
                         attachment for attachment in attachments if attachment
                     ]
-    except (ImportError, Exception):
-        pass
+    except ImportError:
+        _debug_log(
+            "allure_commons is not available; skipping Allure metadata extraction"
+        )
+    except Exception as exc:
+        _debug_log(f"failed to extract Allure metadata: {exc}")
     return res
 
 
-def _collect_allure_fixture_steps(listener, test_result):
-    logger = getattr(listener, "allure_logger", None)
+def _collect_allure_fixture_steps(listener, test_result, alluredir=None):
     test_uuid = getattr(test_result, "uuid", None)
-    if not logger or not test_uuid:
+    if not test_uuid:
+        return None
+
+    fixture_steps = _collect_allure_fixture_steps_from_listener(listener, test_uuid)
+    if fixture_steps:
+        return fixture_steps
+
+    return _collect_allure_fixture_steps_from_containers(test_uuid, alluredir)
+
+
+def _collect_allure_fixture_steps_from_listener(listener, test_uuid):
+    logger = getattr(listener, "allure_logger", None)
+    if not logger:
         return None
 
     get_item = getattr(logger, "get_item", None)
@@ -427,7 +448,10 @@ def _collect_allure_fixture_steps(listener, test_result):
     for item_uuid in item_uuids:
         try:
             container = get_item(item_uuid)
-        except Exception:
+        except Exception as exc:
+            _debug_log(
+                f"failed to read Allure container from listener item {item_uuid}: {exc}"
+            )
             continue
         if not container:
             continue
@@ -442,6 +466,38 @@ def _collect_allure_fixture_steps(listener, test_result):
         afters = getattr(container, "afters", [])
         if afters:
             teardown_steps.extend(_map_allure_step(step) for step in afters)
+
+    if not setup_steps and not teardown_steps:
+        return None
+    return {"setup": setup_steps, "teardown": teardown_steps}
+
+
+def _collect_allure_fixture_steps_from_containers(test_uuid, alluredir):
+    if not alluredir:
+        return None
+
+    alluredir_path = Path(alluredir)
+    if not alluredir_path.exists() or not alluredir_path.is_dir():
+        return None
+
+    setup_steps = []
+    teardown_steps = []
+    for container_path in alluredir_path.glob("*-container.json"):
+        try:
+            with container_path.open(encoding="utf-8") as f:
+                container = json.load(f)
+        except (OSError, ValueError) as exc:
+            _debug_log(f"failed to parse Allure container file {container_path}: {exc}")
+            continue
+
+        children = container.get("children") if isinstance(container, dict) else []
+        if not isinstance(children, list) or test_uuid not in children:
+            continue
+
+        for before in container.get("befores", []) or []:
+            setup_steps.append(_map_allure_step(_allure_data_to_obj(before)))
+        for after in container.get("afters", []) or []:
+            teardown_steps.append(_map_allure_step(_allure_data_to_obj(after)))
 
     if not setup_steps and not teardown_steps:
         return None
@@ -506,7 +562,7 @@ def _map_allure_step(step) -> dict:
 
     mapped = {
         "name": str(step_name),
-        "is_failed": step_status in (Status.FAILED, Status.BROKEN),
+        "is_failed": _allure_status_is_failed(step_status),
         "duration": int(step_stop - step_start) if step_stop and step_start else 0,
     }
     if output:
@@ -550,6 +606,24 @@ def _map_allure_attachment(attachment) -> dict:
     if attachment_type:
         mapped["type"] = str(attachment_type)
     return mapped
+
+
+def _allure_status_is_failed(status) -> bool:
+    status_text = str(status or "").lower()
+    return status_text in {"failed", "broken", "status.failed", "status.broken"}
+
+
+def _allure_data_to_obj(value):
+    """Recursively convert Allure JSON dictionaries/lists into attribute objects."""
+    if isinstance(value, list):
+        return [_allure_data_to_obj(item) for item in value]
+    if isinstance(value, dict):
+        return type(
+            "AllureDataObject",
+            (),
+            {k: _allure_data_to_obj(v) for k, v in value.items()},
+        )()
+    return value
 
 
 def _build_multipart_payload(entry: dict, alluredir):

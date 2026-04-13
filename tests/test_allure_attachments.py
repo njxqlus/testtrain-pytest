@@ -131,7 +131,7 @@ def test_non_file_attachments_are_skipped(test_env):
             monkeypatch.setattr(
                 testtrain_pytest,
                 "_get_allure_result_data",
-                lambda: {
+                lambda *args, **kwargs: {
                     "name": None,
                     "steps": None,
                     "parameters": None,
