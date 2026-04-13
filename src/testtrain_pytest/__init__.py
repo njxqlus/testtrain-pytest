@@ -379,17 +379,19 @@ def _get_allure_result_data() -> dict:
 
                 test_steps = getattr(test_result, "steps", [])
                 mapped_test_steps = [_map_allure_step(s) for s in test_steps]
-
-                fixture_steps = _collect_allure_fixture_steps(listener, test_result)
-                if fixture_steps:
-                    res["steps"] = _wrap_allure_steps_with_lifecycle(
-                        fixture_steps.get("setup", []),
-                        mapped_test_steps,
-                        fixture_steps.get("teardown", []),
-                    )
-                elif mapped_test_steps:
+                if mapped_test_steps:
                     res["steps"] = mapped_test_steps
 
+                try:
+                    fixture_steps = _collect_allure_fixture_steps(listener, test_result)
+                    if fixture_steps:
+                        res["steps"] = _wrap_allure_steps_with_lifecycle(
+                            fixture_steps.get("setup", []),
+                            mapped_test_steps,
+                            fixture_steps.get("teardown", []),
+                        )
+                except Exception:
+                    pass
                 test_attachments = getattr(test_result, "attachments", [])
                 if test_attachments:
                     attachments = [_map_allure_attachment(a) for a in test_attachments]
