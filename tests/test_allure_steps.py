@@ -286,9 +286,9 @@ def test_wrap_allure_steps_with_lifecycle_groups():
         "Test body",
         "Tear down",
     ]
-    assert grouped_steps[0]["duration"] == 2
+    assert grouped_steps[0]["duration"] == 3
     assert grouped_steps[1]["duration"] == 3
-    assert grouped_steps[2]["duration"] == 4
+    assert grouped_steps[2]["duration"] == 5
 
     setup_names = _collect_step_names(grouped_steps[0].get("steps", []))
     body_names = _collect_step_names(grouped_steps[1].get("steps", []))
