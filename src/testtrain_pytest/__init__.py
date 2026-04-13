@@ -409,14 +409,26 @@ def _collect_allure_fixture_steps(listener, test_result):
     if not logger or not test_uuid:
         return None
 
+    get_item = getattr(logger, "get_item", None)
+    if not callable(get_item):
+        return None
+
     items = getattr(logger, "_items", None)
     if not items:
         return None
 
+    try:
+        item_uuids = list(items)
+    except TypeError:
+        return None
+
     setup_steps = []
     teardown_steps = []
-    for item_uuid in items:
-        container = logger.get_item(item_uuid)
+    for item_uuid in item_uuids:
+        try:
+            container = get_item(item_uuid)
+        except Exception:
+            continue
         if not container:
             continue
         children = getattr(container, "children", [])
