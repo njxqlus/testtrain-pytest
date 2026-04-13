@@ -52,3 +52,4 @@ env/
 Thumbs.db
 
 .ruff_cache/
+.python-version
